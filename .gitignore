@@ -1,0 +1,20 @@
+# 审核产物默认不进入版本库（可能含敏感证据）
+security-audit-report.md
+security-reports/
+self-review-*.md
+
+# 本地临时文件
+*.local
+*.log
+*.tmp
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# 编辑器/系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
