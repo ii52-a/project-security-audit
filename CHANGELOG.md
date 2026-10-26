@@ -1,34 +1,61 @@
 # Changelog
 
+## alpha1.2
+
+### English-first migration
+
+- `SKILL.md` and `references/*.md` are now authoritative engineering English.
+- The synchronized Chinese human manual moved to `.chinese/`; agents are explicitly told
+  not to load it as execution context.
+- Added normative RFC 2119 language, explicit stage exit criteria, decision-precedence
+  rules, and a report output contract to improve model comprehension.
+- Added an English README and translated CHANGELOG; the Chinese README and CHANGELOG remain
+  under `.chinese/`.
+- No detection behavior, script interface, or scoring rule changed in this release.
+
 ## alpha1.1
 
-### 安全与一致性修复
+### Safety and consistency fixes
 
-- 统一为“十阶段”（阶段 1–9 主流程 + 阶段 10 复核轮），修正主文件、自审查与脚本中的“九阶段”表述。
-- 统一“动态未复现”的降级规则：最多降半级，且仅当攻击确实覆盖对应路径；删除“降一级”的冲突说法。
-- 明确总体结论判定顺序：先看“不可上线”硬红线（P0≥3、已泄露凭据、认证缺失），再“修复后上线”，最后“可上线”；A/B/C/D 只表示分数等级。
-- 修复登录限流测试与“≤6 次错误密码”红线的冲突：限流探测改用一次性账号、最多 12 次、放在所有会话测试之后。
-- 增加 LLM 工具滥用测试的硬约束：只允许 mock/dry-run/一次性测试租户，禁止真实删除、群发、支付。
-- 增加报告证据脱敏规则（密钥、token、Cookie、PII、内网地址），默认报告目录改为 `security-reports/`，不再写项目根目录。
-- 报告模板增加“审核范围与未覆盖项”、附录 A（接口清单）、附录 B（证据脱敏说明）。
-- 漏洞情报搜索的年份/年月改为占位符，避免示例过期；API 接口清单明确写入附录 A。
-- 修复预提交钩子漏掉 `.env.local`、`.p12`、`.pfx`、`id_rsa` 的问题。
+- Unified the workflow as ten stages (Stages 1–9 main flow, Stage 10 review pass) and
+  removed conflicting "nine-stage" wording.
+- Unified the non-reproduction downgrade rule: at most half a level, and only when the
+  attack actually covered the relevant path.
+- Made conclusion precedence explicit: "not releasable" hard red lines first, then
+  "releasable after remediation", then "releasable". A/B/C/D now denote score bands only.
+- Fixed the conflict between the ≤6-attempt account-lockout rule and the rate-limit probe:
+  the probe uses a disposable account, at most 12 requests, after all session tests.
+- Added a hard LLM tool-abuse constraint: mock/dry-run/disposable tenant only; no real
+  deletion, bulk messaging, or payment.
+- Added report evidence-redaction rules; reports default to `security-reports/`.
+- Added "scope and limitations", Appendix A (interface inventory), and Appendix B
+  (evidence-redaction record) to the report contract.
+- Replaced hard-coded years in vulnerability-intelligence examples with placeholders.
+- Fixed the pre-commit hook to catch `.env.local`, `.p12`, `.pfx`, and `id_rsa`.
 
-### 跨平台与工具
+### Cross-platform tooling
 
-- 新增 `scripts/scan_secrets.py`、`scripts/self_check.py`：Python 3.9+ 跨平台实现，Windows/Linux/macOS 通用。
-- `self_check.py` 支持 `--json`、`--strict`、`--skip-deps`；扫描器失败不再误报 PASS。
-- bash 版 `self_check.sh` 增加 `--strict`、扫描失败处理、敏感文件提示、`.env` / YAML `debug: true` / `.tsx` 等覆盖。
-- `scan_secrets.sh` 与 Python 版规则对齐，新增 `.pypirc`、Docker `auth`、Slack Webhook 规则。
-- 动态测试模板改为多数据库时间盲注（MySQL/PostgreSQL/SQL Server）、UUID/数字 ID 兼容、跨平台临时目录与 base64 写法。
+- Added `scripts/scan_secrets.py` and `scripts/self_check.py`: Python 3.9+,
+  Windows/Linux/macOS, with `--json`, `--strict`, and `--skip-deps`.
+- `self_check.py` fails closed when a scanner fails instead of reporting PASS.
+- The bash `self_check.sh` gained `--strict`, scanner-failure handling, sensitive-file
+  notices, and coverage for `.env`, YAML `debug: true`, and `.tsx` files.
+- Aligned bash secret rules with Python and added `.pypirc`, Docker `auth`, and Slack
+  webhook rules.
+- Updated dynamic-test templates for MySQL/PostgreSQL/SQL Server blind injection, UUID and
+  numeric IDs, and portable temporary-directory/base64 handling.
 
-### 工程质量
+### Engineering
 
-- 新增 `tests/test_smoke.py`：临时夹具覆盖密钥扫描、调试开关、弱默认密码、敏感文件与 `--strict` 退出码。
-- 新增 GitHub Actions CI：Ubuntu/Windows × Python 3.9/3.12，运行回归测试与 bash 语法检查。
-- 新增 `.gitattributes`、`.gitignore`、`README.md`、`VERSION`、`CHANGELOG.md`。
+- Added `tests/test_smoke.py` covering secret scanning, debug switches, weak deployment
+  passwords, sensitive files, and `--strict` exit behavior.
+- Added GitHub Actions CI: Ubuntu/Windows × Python 3.9/3.12, tests plus bash syntax checks.
+- Added `.gitattributes`, `.gitignore`, `README.md`, `VERSION`, and `CHANGELOG.md`.
 
 ## alpha1.0
 
-- 初始版本：十阶段安全审核流程、11 个参考文件、2 个 bash 脚本。
-- 包含密钥扫描、服务器/接口/进阶风险清单、漏洞情报核对、AI 自攻击授权门与红线、P0–P3 五维评分、报告模板、A/B/C 自审查节奏。
+- Initial snapshot: ten-stage security-audit workflow, 11 reference files, and two bash
+  scripts.
+- Included secret scanning, server/API/advanced checklists, vulnerability-intelligence
+  verification, the AI attack authorization gate and red lines, P0–P3 five-dimension
+  scoring, the report template, and the A/B/C self-review cadence.

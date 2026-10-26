@@ -1,63 +1,93 @@
-# 项目接口安全审查清单
+# API Security Review Checklist
 
-先枚举全部接口，再对每个接口逐项检查。对每个接口核心回答四个问题：**谁能调？输入校验了吗？输出脱敏了吗？有频率限制吗？**
+Enumerate every interface first, then review each one. For each interface, answer four
+questions: **Who can call it? Is input validated? Is output redacted? Is it rate-limited?**
 
-## 1. 接口枚举（先做）
+## 1. Interface inventory (do this first)
 
-从以下位置提取完整接口清单，写入报告**附录 A**（格式见 `SKILL.md` 报告模板）：
+Extract the complete inventory and write it to **Appendix A** of the report (format in
+`SKILL.md`):
 
-- 路由定义（Express `app.get/post`、FastAPI `@router`、Spring `@RequestMapping`、Gin `r.GET` 等）
-- RPC/GraphQL schema、WebSocket 事件名、消息队列消费者
-- 管理后台接口、内部调试接口、定时任务与 CLI 入口（它们也是"接口"）
+- Route definitions (Express `app.get/post`, FastAPI `@router`, Spring
+  `@RequestMapping`, Gin `r.GET`, and equivalents).
+- RPC and GraphQL schemas, WebSocket event names, and message-queue consumers.
+- Administrative endpoints, internal debug endpoints, scheduled jobs, and CLI entry
+  points. These are interfaces too.
 
-清单字段：方法 + 路径 + 处理函数位置 + 鉴权中间件(有/无) + 是否公开暴露。
+Inventory fields: method + path + handler location + authentication middleware
+(present/absent) + whether the endpoint is publicly exposed.
 
-## 2. 认证（Authentication）
+## 2. Authentication
 
-- 接口是否声明了认证要求；有无"漏网"接口（新加路由没挂中间件）。
-- Token 从哪来（Header/Cookie/URL 参数）——**URL 传 token 是 P1**（会进日志与 Referer）。
-- Token 过期与刷新机制；长期有效的 API key 是否提供轮换手段。
+- Verify that every endpoint declares its authentication requirement. Look for endpoints
+  that "fell through" because a new route was added without middleware.
+- Determine where the token comes from (header, cookie, or URL parameter). **A token in a
+  URL is P1** because it is written to logs and the `Referer` header.
+- Check token expiration and refresh behavior, and whether long-lived API keys have a
+  rotation mechanism.
 
-## 3. 鉴权（Authorization / 越权）
+## 3. Authorization and object-level access control
 
-- **水平越权（IDOR）**：对象级权限检查——接口按 ID 取资源时，是否校验资源属主。逐个接口核对 `findById(id)` 前有没有 `where userId = currentUser` 之类的约束。
-- **垂直越权**：普通用户能否调用管理接口；角色检查是在中间件统一做，还是散落遗漏。
-- **功能级**：导出、批量删除、支付改价等高危操作是否有二次校验（幂等 token、签名）。
+- **Horizontal privilege escalation (IDOR).** For every endpoint that fetches a resource
+  by ID, verify that ownership is checked. Before `findById(id)`, look for a constraint
+  such as `where userId = currentUser`.
+- **Vertical privilege escalation.** Check whether a normal user can call administrative
+  endpoints, and whether role checks are enforced centrally in middleware or scattered
+  and incomplete.
+- **Function-level authorization.** High-risk operations such as export, bulk delete, and
+  payment-price changes SHOULD require a second check (idempotency token or signature).
 
-## 4. 输入处理
+## 4. Input handling
 
-- 所有入参（query、body、path、header、文件）是否有 schema 校验（zod/joi/pydantic/class-validator 等），未校验字段是否被直接透传到 ORM/SQL（mass assignment 风险：`req.body` 直接 `update`）。
-- 数值边界：分页 size 是否上限（`size=999999999`）、金额是否服务端计算。
-- 类型混淆：`Array.isArray` 检查、字符串 vs 对象（`{"$gt": ""}` 型 NoSQL 注入）。
-- 富文本/HTML 输入是否消毒。
+- Verify schema validation for all inputs (query, body, path, header, files) using zod,
+  joi, pydantic, class-validator, or an equivalent. Check whether unvalidated fields are
+  passed directly to the ORM or SQL (mass-assignment risk: `req.body` passed directly to
+  `update`).
+- Check numeric bounds: pagination size limits (for example `size=999999999`) and whether
+  monetary amounts are computed server-side.
+- Check type confusion: `Array.isArray` checks, and string-versus-object confusion
+  (NoSQL injection such as `{"$gt": ""}`).
+- Verify sanitization of rich-text and HTML input.
 
-## 5. 输出处理与信息泄露
+## 5. Output handling and information disclosure
 
-- 响应是否返回了多余字段：密码 hash 字段、内部 ID、其他用户的私有字段。检查序列化配置（`toJSON`、serializer、`select *` 后整体返回）。
-- 错误响应是否区分"用户不存在"与"密码错误"（枚举辅助）；是否把堆栈/SQL 返回给客户端。
-- 分页接口是否允许无限制遍历抓取全量数据。
+- Check whether responses contain extra fields: password hashes, internal IDs, or other
+  users' private fields. Review serialization configuration (`toJSON`, serializers, and
+  `select *` followed by returning the entire row).
+- Check whether error responses distinguish "user does not exist" from "wrong password"
+  (account enumeration), and whether stack traces or SQL are returned to clients.
+- Check whether pagination endpoints allow unlimited traversal and bulk extraction.
 
-## 6. 限流与防刷
+## 6. Rate limiting and abuse prevention
 
-- 登录、注册、找回密码、短信/邮件发送、支付类接口是否限流（无限流的短信接口 = 防轰炸 = P1）。
-- 全局有没有 rate limit 中间件；是否基于 IP+账号双维度；分布式部署下限流是否用 Redis 而非内存。
-- 验证码的启用场景与失效时间。
+- Verify rate limits on login, registration, password reset, SMS/email sending, and
+  payment endpoints. An unlimited SMS endpoint enables SMS bombing and is P1.
+- Check for a global rate-limit middleware, whether it keys on both IP and account, and
+  whether distributed deployments use Redis rather than in-process memory.
+- Check where CAPTCHA is required and how long it remains valid.
 
-## 7. CORS 与跨域
+## 7. CORS and cross-origin access
 
-- 配置来源是硬编码白名单还是通配/反射 Origin；`credentials: true` 时 Origin 必须白名单。
-- 是否允许了 `null` Origin（iframe sandbox 场景可利用）。
+- Determine whether the configuration is a hard-coded allowlist or a wildcard/reflected
+  `Origin`. When `credentials: true`, the origin MUST be allow-listed.
+- Check whether `null` origin is allowed (exploitable in iframe-sandbox scenarios).
 
-## 8. 文件上传/下载接口
+## 8. File upload and download endpoints
 
-- 见 server-vulns.md 第 4 节，接口层面额外检查：上传后返回的 URL 域名、下载是否校验签名与有效期（防遍历他人文件）。
+- Follow `server-vulns.md` Section 4. At the API layer, additionally check the domain of
+  the URL returned after upload, and whether downloads verify a signature and expiration
+  (to prevent enumeration of other users' files).
 
-## 9. 第三方回调 / Webhook
+## 9. Third-party callbacks and webhooks
 
-- 支付回调是否验签（signature/证书），是否信任客户端传来的金额状态。
-- 回调是否幂等（重复通知会否重复发货/入账）。
+- Verify signature or certificate validation on payment callbacks, and confirm that the
+  server does not trust a client-supplied amount or payment status.
+- Verify idempotency: a repeated notification MUST NOT trigger duplicate shipment or
+  duplicate credit.
 
-## 10. 接口文档与暴露面
+## 10. API documentation and exposed surface
 
-- Swagger/OpenAPI 文档、GraphQL playground、Druid/Actuator 是否在生产暴露。
-- OPTIONS/TRACE 等方法是否关闭；HTTP 与 HTTPS 是否同时开放且 http 不跳转。
+- Check whether Swagger/OpenAPI documentation, GraphQL playground, Druid, or Actuator is
+  exposed in production.
+- Check whether `OPTIONS`/`TRACE` and other unnecessary methods are disabled, and whether
+  HTTP and HTTPS are both open while HTTP does not redirect.

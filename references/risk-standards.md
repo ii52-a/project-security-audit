@@ -1,104 +1,141 @@
-# 项目风险评估与安全性评估标准
+# Project Risk and Security Assessment Standard
 
-## 1. 严重度评级标准（P0–P3）
+## 1. Severity classification (P0–P3)
 
-| 级别 | 判定标准 | 处理要求 |
+| Severity | Criteria | Handling requirement |
 |---|---|---|
-| P0 严重 | 无需特殊条件即可利用，直接导致数据泄露、权限绕过或系统接管 | 立即修复，上线前必须清零 |
-| P1 高 | 有前置条件（需登录、需特定配置）但可稳定利用；或大规模敏感数据暴露 | 上线前修复，最多容忍 7 天 |
-| P2 中 | 利用条件受限、影响范围有限、或需要接近系统的攻击者 | 排入近期迭代（30 天内） |
-| P3 低 | 加固类建议，不构成直接风险 | 持续改进 |
+| P0 Critical | Exploitable without special conditions and directly causes data disclosure, authorization bypass, or system compromise | Fix immediately; must be zero before release |
+| P1 High | Exploitable with preconditions (authentication or specific configuration) but reliable; or large-scale sensitive-data exposure | Fix before release; tolerate for no more than 7 days |
+| P2 Medium | Limited exploitation conditions or scope, or requires an attacker close to the system | Schedule within the next iteration (30 days) |
+| P3 Low | Hardening recommendation with no direct risk | Continuous improvement |
 
-**评级修正因素**（同漏洞在不同上下文升降级）：
+**Severity modifiers** (the same issue may move up or down with context):
 
-- 涉及生产凭据/真实用户数据 → 升一级；仅测试环境 → 降一级。
-- 有自动化利用可能（扫描器可直接打） → 升一级。
-- 已有缓解措施（如前面有 WAF/内网隔离）→ 最多降一级，但需在报告中注明缓解前提。
+- Production credentials or real user data → raise one level. Test environment only →
+  lower one level.
+- Automated exploitation is feasible (a scanner can directly attack it) → raise one level.
+- A real mitigation exists (for example, a WAF or network isolation) → lower at most one
+  level, and state the mitigation assumption in the report.
 
-**动态验证评级规则**（结合阶段 7 自攻击测试结果）：
+**Dynamic-validation rules** (apply after Stage 7):
 
-- **动态复现** → 标注 [已验证]，评级维持或上调，**不可因推测性缓解下调**——缓解必须真实存在且攻击确实未能绕过才可计入。
-- **动态未复现**（执行了对应攻击但未成功）→ 静态评级最多降半级，标注"未复现（ATK-xx）"；只有在该攻击确实覆盖了对应路径、且未复现不是环境差异造成时才能降。不因"没打出来"直接降一整级。
-- **无法验证**（环境起不来、依赖真实第三方凭据等）→ 保持静态评级，标注"未验证"，列入"需人工复核"。
+- **Reproduced dynamically** → mark `[VERIFIED]`; keep or raise the severity. **Do not
+  downgrade based on a speculative mitigation.** A mitigation counts only if it is real
+  and the attack actually failed to bypass it.
+- **Not reproduced dynamically** (the attack ran but did not succeed) → downgrade the
+  static severity by at most half a level and mark `NOT REPRODUCED (ATK-xx)`. Downgrade
+  only if the attack actually covered the relevant path and the failure is not explained by
+  an environment difference. Do not drop a full level merely because "the exploit did not
+  work".
+- **Not verifiable** (environment would not start, real third-party credentials required,
+  and similar) → keep the static severity, mark `NOT VERIFIED`, and list it under
+  "manual review required".
 
-## 2. 五维度评分体系（各 0–10 分，加权总分 100）
+## 2. Five-dimension scoring (each 0–10; weighted total 100)
 
-| 维度 | 权重 | 评分要点 |
-|---|---|---|
-| 攻击面控制 | 25% | 暴露端口与服务最小化；管理后台隔离；文档与调试端点关闭；无用依赖与代码裁剪 |
-| 认证与访问控制 | 30% | 密码存储与策略；会话管理；鉴权覆盖完整性（无漏网接口）；越权防护 |
-| 数据保护 | 20% | 密钥管理；传输加密；敏感数据脱敏与日志卫生；备份与删除策略 |
-| 依赖与供应链 | 15% | 已知 CVE 数量与严重度；依赖更新机制；锁文件与来源可信度 |
-| 运维与应急能力 | 10% | 日志与告警；错误处理不泄露信息；有回滚/应急联系人/安全更新流程 |
+| Dimension | Weight | Scoring focus |
+|---|---:|---|
+| Attack-surface control | 25% | Minimal exposed ports and services; isolated administrative interfaces; documentation and debug endpoints disabled; unused dependencies and code removed |
+| Authentication and access control | 30% | Password storage and policy; session management; complete authorization coverage (no unprotected endpoint); object-level authorization |
+| Data protection | 20% | Key management; encryption in transit; sensitive-data redaction and log hygiene; backup and deletion policy |
+| Dependency and supply chain | 15% | Known CVE count and severity; dependency-update process; lock files and source trustworthiness |
+| Operations and incident response | 10% | Logging and alerting; error handling that does not disclose information; rollback, on-call contact, and security-update process |
 
-**单维度打分参考**：0–2 存在 P0 且无缓解；3–4 存在 P0 但有部分缓解，或多个 P1；5–6 无 P0，有 1–2 个 P1；7–8 仅 P2；9–10 仅个别 P3。
+**Per-dimension reference:** 0–2 = P0 present with no mitigation; 3–4 = P0 present with
+partial mitigation, or multiple P1; 5–6 = no P0 and one or two P1; 7–8 = P2 only; 9–10 =
+only isolated P3.
 
-**扣分校准表**（从 10 分起扣，按"所属维度"累计，最低 0；用于减少不同审核者之间的漂移）：
+**Deduction calibration** (start at 10, subtract within the affected dimension, floor at 0;
+use this to reduce drift between auditors):
 
-| 发现 | 对所属维度的扣分 |
+| Finding | Deduction from the affected dimension |
 |---|---:|
-| P0，未缓解 | 4–6 |
-| P0，有真实缓解且已验证 | 2–3 |
+| P0, unmitigated | 4–6 |
+| P0, with a real, verified mitigation | 2–3 |
 | P1 | 1–2 |
 | P2 | 0.5 |
 | P3 | 0.1 |
 
-同一维度命中多条时累加；报告"评分明细"必须列出每条扣分对应的发现编号，不能只给一个总分。该表是校准工具，不是精确公式，最终分数要能用证据解释。
+Accumulate deductions within a dimension. The "Score breakdown" section MUST list the
+finding ID for every deduction, not only a total. This table is a calibration aid, not an
+exact formula; the final score MUST be explainable from the evidence.
 
-**分数等级**：≥85 A；70–84 B；50–69 C；<50 D。A/B/C/D 只表示分数段，不直接等于上线结论——是否可上线还要过第 4 节的硬门槛。
+**Score bands:** ≥85 A; 70–84 B; 50–69 C; <50 D. A/B/C/D indicate only the score band and
+do not by themselves determine release status; the hard gates in Section 4 also apply.
 
-## 3. 项目风险评估维度（除漏洞外的业务性风险）
+## 3. Project risk dimensions (business risk beyond vulnerabilities)
 
-逐项判断并写入报告：
+Assess each item and include it in the report:
 
-- **数据风险**：收集了哪些敏感数据（身份证、手机号、支付）？是否最小化收集？是否明文存储？删除请求能否真正删除？
-- **合规风险**：涉及个人信息的密码策略、日志留存、第三方 SDK 数据共享是否有说明；境内业务是否考虑等保/个保法要求（提示性建议，不越界下法律结论）。
-- **可用性风险**：单点依赖（单库、单实例、单一第三方 API）；无缓存时被刷的接口；无备份或备份从未演练恢复。
-- **流程风险**：上线是否绕过测试；生产配置与开发配置如何隔离；谁有生产权限、是否有审计。
-- **人因风险**：密钥在群聊/工单/文档中流转的痕迹；代码注释中的内部敏感信息（内网拓扑、默认账号）。
+- **Data risk.** What sensitive data is collected (national ID, phone number, payment
+  data)? Is collection minimized? Is it stored in plaintext? Does a deletion request
+  actually delete it?
+- **Compliance risk.** Are the password policy, log retention, and third-party SDK data
+  sharing documented? For China-facing services, consider MLPS (Cybersecurity Classified
+  Protection) and PIPL (Personal Information Protection Law) obligations. Provide
+  indicative guidance only; do not make legal conclusions.
+- **Availability risk.** Single points of failure (one database, one instance, one
+  third-party API); endpoints that can be abused when no cache exists; no backups, or
+  backups never tested for restore.
+- **Process risk.** Whether releases bypass testing; how production and development
+  configuration are separated; who has production access and whether it is audited.
+- **Human-factor risk.** Traces of keys circulating in chat, tickets, or documents;
+  internal sensitive information in code comments (internal topology, default accounts).
 
-## 4. 总体结论判定
+## 4. Overall conclusion
 
-**判定顺序（必须按此顺序，命中即停）**：
+**Evaluate in this order and stop at the first match:**
 
-1. **不可上线**（硬红线，优先于其他所有结论）：P0 ≥3 个，或存在"已泄露需轮换"的凭据，或认证体系整体缺失。
-2. **修复后上线**：存在 P0/P1，但修复路径明确、预计工作量小（≤3 天）。
-3. **可上线**：无 P0、无未缓解 P1，总分 ≥85。
+1. **Not releasable** (hard red line, takes precedence over every other conclusion):
+   three or more P0 findings, a credential that was disclosed and must be rotated, or a
+   completely missing authentication system.
+2. **Releasable after remediation:** P0/P1 findings exist, but the remediation path is
+   clear and the estimated effort is small (≤3 days).
+3. **Releasable:** no P0, no unmitigated P1, and total score ≥85.
 
-同一项目同时满足多条时，取最严格的结论；报告里要写明命中的是哪一条。不要用"总分很高"抵消硬红线。
+If a project matches more than one condition, use the most restrictive conclusion and state
+which condition was matched. Do not let a high total score override a hard red line.
 
-## 5. 报告"发现"条目的写作要求
+## 5. Finding write-up requirements
 
-每条发现必须包含五要素，缺一不可：
+Every finding MUST contain all five elements:
 
+```text
+[P1] Horizontal privilege escalation — any user's orders can be read
+Location: src/routes/orders.ts:42
+Issue: findById(orderId) does not verify order ownership
+Exploitation: log in as any account, then GET /api/orders/<another user's order ID>
+Remediation: add userId = currentUser to the query; add an integration test for this route
 ```
-[P1] 水平越权——可读取任意用户订单
-位置：src/routes/orders.ts:42
-问题：findById(orderId) 未校验订单属主
-利用：登录任意账号后 GET /api/orders/<他人订单ID> 即可获取内容
-修复：查询条件追加 userId = currentUser；补一条该路径的集成测试
+
+For a dynamically verified finding, use the "endpoint + attack record" format. The attack
+ID MUST map to the evidence row in the report's dynamic-test section:
+
+```text
+[P0][VERIFIED] SQL injection — time-based blind injection in the items endpoint
+Location: GET /api/items?id= (source: src/routes/items.ts:31, string concatenation)
+Attack record: ATK-05 — payload `id=1;SELECT SLEEP(2)--` increased response time from 0.1s to 2.4s (reproduced twice)
+Exploitation: time-based blind injection can extract the entire database byte by byte
+Remediation: use parameterized queries and a numeric allowlist for id; add a blind-injection regression test
 ```
 
-动态验证过的发现用"接口 + 攻击记录"格式（攻击编号必须能对应到报告自攻击测试记录一节的证据行）：
+Remediation MUST be specific to the code or configuration (which file to change, which
+validation to add). Do not write generic advice such as "strengthen access control".
 
-```
-[P0][已验证] SQL 注入——items 接口时间盲注
-位置：GET /api/items?id=（源码 src/routes/items.ts:31，字符串拼接）
-攻击记录：ATK-05 —— payload `id=1;SELECT SLEEP(2)--` 使响应时间从 0.1s 变为 2.4s（复现 2 次）
-利用：时间盲注可逐字节拖取全库数据
-修复：改参数化查询 + id 数字白名单；补盲注回归测试
-```
+## 6. Report evidence redaction
 
-修复建议要具体到代码层（改哪个文件、加什么校验），不要写"加强权限管理"这类空话。
+The report is itself a sensitive artifact. Apply these rules before writing it:
 
-## 6. 报告证据脱敏
+- Secrets and credentials: retain at most the first and last four characters with `****`
+  in between; a complete value MUST NOT appear in the report.
+- `Authorization`, `Cookie`, `Set-Cookie`, password, token, and secret fields: replace the
+  value with `[REDACTED]`.
+- Phone numbers, email addresses, national IDs, and bank cards: mask while preserving the
+  identifiable format (for example `138****1234`, `a***@example.com`).
+- Internal addresses: preserve the subnet but remove specific hostnames and accounts.
+- Keep unredacted evidence separately, with least-privilege directory permissions. Do not
+  commit it to Git or place it on a shared drive. Appendix B MUST state the storage
+  location and access control.
 
-报告本身就是敏感文件，落盘前按以下规则处理：
-
-- 密钥/凭据：只保留前后各 4 位，中间用 `****`；不得在报告里出现完整值。
-- `Authorization`、`Cookie`、`Set-Cookie`、password/token/secret 字段：整体替换为 `[REDACTED]`。
-- 手机号、邮箱、身份证、银行卡：保留可识别格式的掩码（如 `138****1234`、`a***@example.com`）。
-- 内网地址：可保留网段，隐去具体主机名/账号。
-- 原始未脱敏证据单独存放，目录权限最小化，不提交 git，不放进共享盘；报告附录 B 写明存放位置与访问控制。
-
-如果无法脱敏又必须保留证据，就把该段移出报告，改为"证据文件编号 + 存放位置"，报告正文只引用编号。
+If evidence cannot be redacted but must be retained, move it out of the report and replace
+it with `evidence file ID + location`; the report body references only the ID.

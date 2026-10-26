@@ -1,58 +1,98 @@
-# 密钥泄露、硬编码与劫持风险检查清单
+# Secrets, Hard-Coded Credentials, and Hijacking Risks
 
-## 1. 硬编码密钥扫描
+## 1. Hard-coded secret scan
 
-先运行 `python scripts/scan_secrets.py <目录>`（跨平台；无 Python 时用 `bash scripts/scan_secrets.sh <目录>`）获得候选点，再人工逐条确认。脚本扫不到的模式要人工补查：
+Run `python scripts/scan_secrets.py <directory>` (cross-platform; if Python is
+unavailable, use `bash scripts/scan_secrets.sh <directory>`) to obtain candidates, then
+confirm each candidate manually. Manually check patterns the scanner cannot detect:
 
-- 日志语句中打印的密码/token（`console.log(password)`、`logger.info(token)`）
-- 前端打包产物/源码里的内网 IP、内部域名、接口密钥（搜索 `192.168.`、`10.`、`internal.`、`api-key`）
-- 移动端配置（`AndroidManifest`、`Info.plist`）中的第三方 SDK key
-- 包管理器/容器配置：`.npmrc` 的 `_authToken`、`.pypirc` 的明文 `password`、Docker `config.json` 的 `auth` base64、Kubernetes Secret 清单
-- 错误处理中把连接串带进异常消息
+- Passwords or tokens written to logs (`console.log(password)`,
+  `logger.info(token)`).
+- Internal IP addresses, internal hostnames, and API keys in front-end bundles or source
+  (search for `192.168.`, `10.`, `internal.`, and `api-key`).
+- Third-party SDK keys in mobile configuration (`AndroidManifest`, `Info.plist`).
+- Package-manager and container configuration: `_authToken` in `.npmrc`, plaintext
+  `password` in `.pypirc`, base64 `auth` in Docker `config.json`, and Kubernetes Secret
+  manifests.
+- Connection strings included in exception messages by error handling.
 
-## 2. 高危硬编码模式（按此核对扫描结果）
+## 2. High-risk hard-coded patterns
 
-| 类别 | 典型模式 |
+Use these patterns when reviewing scanner output:
+
+| Category | Typical pattern |
 |---|---|
-| 云厂商 AK/SK | `AKIA[A-Z0-9]{16}`（AWS）、`LTAI`（阿里云）、`AKLT`（火山） |
-| 私钥文件内容 | `-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----` |
-| 数据库连接串 | `mysql://user:pass@`、`postgres://`、`mongodb://`、`redis://`（带密码的） |
-| JWT/签名 secret | `secret`、`jwt_key`、`signing_key` 赋值为字面量 |
-| 邮件/短信凭据 | `smtp` 密码、`Authorization: Basic`、Twilio/SendGrid key |
-| OAuth client secret | `client_secret` 字面量 |
-| 支付密钥 | 微信 `mch_key`、支付宝私钥、Stripe `sk_live_/sk_test_` |
-| 弱默认口令 | `password = "123456"`、`root/root`、`admin/admin`、默认 token |
+| Cloud access keys | `AKIA[A-Z0-9]{16}` (AWS), `LTAI` (Alibaba Cloud), `AKLT` (Volcengine) |
+| Private-key material | `-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----` |
+| Database connection strings | `mysql://user:pass@`, `postgres://`, `mongodb://`, `redis://` with a password |
+| JWT/signing secrets | Literal values assigned to `secret`, `jwt_key`, or `signing_key` |
+| Email/SMS credentials | `smtp` password, `Authorization: Basic`, Twilio/SendGrid keys |
+| OAuth client secrets | Literal `client_secret` |
+| Payment keys | WeChat Pay `mch_key`, Alipay private key, Stripe `sk_live_`/`sk_test_` |
+| Weak default passwords | `password = "123456"`, `root/root`, `admin/admin`, default tokens |
 
-**判定规则**：出现在源码/配置且指向生产环境（域名、live key）→ P0；测试环境占位符 → P2 提醒；仅存在于示例文档 → 忽略但备注。
+**Classification rule:** a real value in source or configuration that points to a
+production environment (production domain or live key) is P0. A placeholder for a test
+environment is P2. A value that exists only in example documentation may be ignored but
+SHOULD be noted.
 
-## 3. 密钥管理实践检查
+## 3. Secret-management practices
 
-- 是否使用环境变量/密钥管理服务（Vault、KMS、云函数环境变量）；`.env` 是否在 `.gitignore`。
-- 是否提供 `.env.example`（不含真值）。
-- git 历史深挖：`git log --all --diff-filter=A -- '*.env' '*.pem' '*.key' '*.p12'`，以及全量 `git log -p -S '<疑似密钥片段>'`。**已提交过即视为泄露，需轮换，仅删除文件不算修复**（写入报告 P0/P1）。
-- 密钥是否有失效/轮换机制说明；同一个密钥是否复用在多环境。
-- 前端项目中"环境变量"是否经打包进产物（`NEXT_PUBLIC_`、`VITE_` 前缀变量是公开的，放 secret 即 P0）。
+- Check whether secrets use environment variables or a secret manager (Vault, KMS, cloud
+  function environment variables), and whether `.env` is in `.gitignore`.
+- Check whether `.env.example` exists and contains no real values.
+- Inspect Git history:
+  `git log --all --diff-filter=A -- '*.env' '*.pem' '*.key' '*.p12'` and, for suspected
+  values, `git log -p -S '<secret fragment>'`. **A secret that was ever committed MUST be
+  treated as compromised and rotated; deleting the file is not remediation.** Record it as
+  P0/P1 in the report.
+- Check whether keys have an expiration/rotation procedure and whether the same key is
+  reused across environments.
+- In front-end projects, check whether "environment variables" are bundled into the
+  artifact. Variables prefixed with `NEXT_PUBLIC_` or `VITE_` are public; placing a secret
+  in one is P0.
 
-## 4. 密码与凭据安全
+## 4. Password and credential security
 
-- 明文密码出现在配置、日志、错误消息、数据库初始数据（seed 文件里的真实用户密码）。
-- 密码策略：最小长度、复杂度、是否禁止常见密码；默认账号是否强制改密。
-- 内部系统间调用的服务凭据：是否共享一个万能账号、是否写死在代码里。
+- Check for plaintext passwords in configuration, logs, error messages, and database seed
+  data (real user passwords in a seed file).
+- Review password policy: minimum length, complexity, blocked common passwords, and forced
+  password change for default accounts.
+- Review service credentials used between internal systems: whether a shared "super"
+  account is used and whether credentials are hard-coded.
 
-## 5. 劫持类风险
+## 5. Hijacking risks
 
-- **会话劫持**：Cookie 缺 `HttpOnly`/`Secure`（XSS 可偷 session）；token 进 URL；登录后不重置 session id（session fixation）。
-- **点击劫持**：缺 `X-Frame-Options` / CSP `frame-ancestors`（尤其管理后台与支付页）。
-- **DNS/CDN 劫持面**：是否强制 HTTPS 与 HSTS（缺 HSTS 的登录页在 http 下可被劫持）；第三方 JS 资源（统计、SDK、CDN）是否带 `integrity` SRI 或自托管；DNS TTL 与域名解析是否用了不受信的公共解析做内部服务发现。
-- **中间人**：代码里是否有 `http://` 内部调用、`rejectUnauthorized: false` / `verify=False` / `InsecureSkipVerify: true` 关闭证书校验（每处都是 P1）。
-- **供应链劫持**：依赖是否锁版本与哈希（lock 文件提交）、`postinstall` 脚本是否来自不常见包、镜像源是否为官方/可信私有源。
-- **账号劫持**：改邮箱/手机是否需要验证旧凭据；找回密码 token 的熵与时效；OAuth 回调 redirect_uri 是否校验（开放重定向可劫持授权码）。
-- **开放重定向**：`redirect(参数)` 未白名单校验（`next=`、`returnUrl=`），配合钓鱼与 OAuth 劫持。
+- **Session hijacking.** Missing `HttpOnly`/`Secure` cookies (XSS can steal the session),
+  tokens in URLs, and no session-ID rotation after login (session fixation).
+- **Clickjacking.** Missing `X-Frame-Options` or CSP `frame-ancestors`, especially on
+  administrative and payment pages.
+- **DNS/CDN hijacking surface.** Missing HTTPS/HSTS (a login page on HTTP can be
+  hijacked), third-party JavaScript (analytics, SDKs, CDNs) without `integrity` SRI or
+  self-hosting, and internal service discovery through untrusted public resolvers.
+- **Machine-in-the-middle.** Internal `http://` calls and disabled certificate validation
+  (`rejectUnauthorized: false`, `verify=False`, `InsecureSkipVerify: true`). Each instance
+  is P1.
+- **Supply-chain hijacking.** Dependencies pinned by version and hash (lock file
+  committed), `postinstall` scripts from unusual packages, and registries that are not
+  official or trusted private mirrors.
+- **Account hijacking.** Changing email or phone without verifying the old credential,
+  low-entropy or long-lived password-reset tokens, and OAuth `redirect_uri` validation
+  failures (an open redirect can leak authorization codes).
+- **Open redirect.** `redirect(parameter)` without an allowlist (`next=`, `returnUrl=`),
+  usable for phishing and OAuth code theft.
 
-## 6. 报告脱敏与泄露处置
+## 6. Report redaction and compromise handling
 
-- 报告中的密钥只保留前后各 4 位，中间 `****`；`Authorization`/`Cookie`/password/token 整体 `[REDACTED]`。
-- 手机号、邮箱、身份证、银行卡做掩码；内网地址保留网段、隐去主机名。
-- 完整未脱敏证据单独存放，目录权限最小化，不提交 git、不放共享盘；报告只引用"证据文件编号 + 位置"。
-- 发现已提交的密钥：**先轮换，再清理历史**；只删文件不算修复。轮换步骤写进报告，并记录轮换负责人/截止时间。
-- 报告文件本身加入 `.gitignore`；默认输出到 `security-reports/`，不要放在仓库根目录。
+- Secrets in the report show at most four leading and four trailing characters, with
+  `****` in between; `Authorization`, `Cookie`, password, and token values are
+  `[REDACTED]`.
+- Mask phone numbers, email addresses, national IDs, and bank cards. Preserve the subnet
+  of internal addresses but remove hostnames.
+- Keep unredacted evidence in a separate, access-controlled local directory. Do not
+  commit it or place it on a shared drive; the report SHOULD reference only
+  `evidence file ID + location`.
+- For a committed secret: **rotate first, then clean history**. Deleting the file is not
+  remediation. Record the rotation steps, owner, and deadline in the report.
+- Add the report file to `.gitignore`; write reports to `security-reports/`, not the
+  repository root.

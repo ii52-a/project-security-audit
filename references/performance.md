@@ -1,45 +1,69 @@
-# 性能优化分析清单
+# Performance Optimization Analysis Checklist
 
-本节是分析与建议罗列，不是漏洞——不要与 P0–P3 混排。输出按"数据库 → 应用层 → 前端/网络 → 基础设施"分组，每条注明证据位置、影响量级估计（高/中/低）与建议。
+This section is advisory analysis, not vulnerabilities. Do not mix these items into the
+P0–P3 finding table. Group output as **database → application → front end/network →
+infrastructure**, and include the evidence location, estimated impact (high/medium/low),
+recommendation, and effort for each item.
 
-## 1. 数据库层（通常收益最大，先查）
+## 1. Database layer (usually the largest gain; check first)
 
-- **N+1 查询**：循环体内执行查询（`for ... await db.query`）；ORM 的关联在循环中懒加载。修法：批量 IN 查询或 eager loading。
-- **缺索引迹象**：where/orderBy 字段与索引定义比对；无法确认时标注"需 DBA 用 EXPLAIN 复核"。
-- **`SELECT *`**：大表宽字段（TEXT/BLOB）被整行拉取。
-- **无分页的大查询**：一次取全表做内存过滤/聚合。
-- **连接池**：每次请求新建连接、或池大小写死为 1；连接是否复用（单例 client vs 每函数新建）。
-- **事务范围过大**：事务内做 HTTP 调用/重计算，长时间占锁。
-- **同步阻塞型操作**：大文件/图片存数据库而非对象存储。
+- **N+1 queries.** A query inside a loop (`for ... await db.query`), or ORM relations
+  lazily loaded inside a loop. Fix with a batched `IN` query or eager loading.
+- **Missing-index signals.** Compare `WHERE`/`ORDER BY` columns with index definitions. If
+  you cannot confirm, mark `DBA review with EXPLAIN required`.
+- **`SELECT *`.** A wide table (TEXT/BLOB columns) is fetched row by row in full.
+- **Unbounded large queries.** Fetching an entire table and filtering or aggregating in
+  memory.
+- **Connection pooling.** A new connection per request, or a pool hard-coded to size 1.
+  Check whether connections are reused (singleton client versus per-function creation).
+- **Oversized transactions.** HTTP calls or heavy computation inside a transaction, holding
+  locks for a long time.
+- **Synchronous blocking work.** Large files or images stored in the database instead of
+  object storage.
 
-## 2. 应用层
+## 2. Application layer
 
-- **串行可并行**：互相独立的多次 IO 用 `Promise.all`/`asyncio.gather` 串行执行。
-- **重复计算**：同一请求内重复查询相同数据（无请求级缓存/记忆化）。
-- **同步 CPU 密集**：Node 单线程内做加密/压缩/图像处理阻塞事件循环（应进 worker 或队列）；Python 的纯 CPU 循环。
-- **缓存缺失**：热点数据（配置、首页、排行榜）无任何缓存层；或缓存无 TTL/无失效策略。
-- **启动性能**：入口同步 require 全部模块、启动时全量预热。
-- **内存风险**：无上限的全局 Map/数组增长（缓存无淘汰 = 慢性泄漏）。
+- **Serial work that could be parallel.** Independent I/O operations executed serially
+  instead of with `Promise.all` or `asyncio.gather`.
+- **Repeated computation.** The same data queried multiple times within one request, with
+  no request-level cache or memoization.
+- **Synchronous CPU-bound work.** Encryption, compression, or image processing on Node's
+  single thread blocking the event loop (move to a worker or queue); pure-CPU Python loops.
+- **Missing cache.** Hot data (configuration, home page, leaderboard) with no cache layer,
+  or a cache without TTL or invalidation policy.
+- **Startup performance.** Synchronously requiring every module at entry, or warming
+  everything at startup.
+- **Memory risk.** Unbounded global maps or arrays (a cache without eviction is a slow
+  leak).
 
-## 3. 前端 / 网络
+## 3. Front end and network
 
-- 包体积：未做代码分割（单 bundle 含全部路由）；引入整包（`import * as _ from 'lodash'`）；大依赖 moment/antd 全量引入。
-- 静态资源：图片未压缩/未用现代格式、无 CDN、无 gzip/brotli、无长缓存指纹。
-- 关键路径：CSS/JS 阻塞渲染、首屏请求串行瀑布、字体未 swap。
-- 接口设计：列表页一次拉全量字段、无字段裁剪、无批量接口导致多次往返。
+- **Bundle size.** No code splitting (one bundle contains every route); whole-package
+  imports (`import * as _ from 'lodash'`); full imports of large dependencies such as
+  moment or antd.
+- **Static assets.** Uncompressed images or legacy formats, no CDN, no gzip/brotli, no
+  long-lived fingerprinted caching.
+- **Critical path.** Render-blocking CSS/JS, serial first-screen request waterfalls,
+  fonts without `font-display: swap`.
+- **API design.** List pages fetch every field, no field selection, and no batch endpoint,
+  causing multiple round trips.
 
-## 4. 基础设施 / 部署
+## 4. Infrastructure and deployment
 
-- 无进程守护与优雅重启；单实例无水平扩展设计（内存 session 即扩展障碍）。
-- 日志同步写盘且无轮转；无指标监控（无法定位慢在哪本身就是问题，列为"低-中"影响但要提）。
-- 构建产物未压缩/未做 tree-shaking；Docker 镜像含 devDependencies 与构建缓存（拉取慢）。
+- No process supervision or graceful restart; a single instance with no horizontal-scaling
+  design (in-memory sessions are an immediate scaling blocker).
+- Synchronous log writes without rotation; no metrics or monitoring (inability to locate
+  latency is itself a problem; rate it low-to-medium but report it).
+- Build artifacts not minified or tree-shaken; Docker images include devDependencies and
+  build caches (slow pulls).
 
-## 5. 输出格式
+## 5. Output format
 
-```
-| 编号 | 类别 | 问题 | 证据位置 | 影响估计 | 建议 | 工作量 |
+```text
+| ID | Category | Issue | Evidence | Impact | Recommendation | Effort |
 |---|---|---|---|---|---|---|
-| PERF-01 | 数据库 | 循环内逐条查询 | src/dao/user.ts:57 | 高 | 改批量 IN 查询 | 小 |
+| PERF-01 | Database | Per-row query inside a loop | src/dao/user.ts:57 | High | Use a batched IN query | Small |
 ```
 
-结尾给一段 3–5 句的总结：哪 2–3 项做了之后整体收益最大，作为"性能速赢清单"。
+End with a 3–5 sentence summary identifying the two or three changes with the largest
+overall benefit: the "performance quick wins" list.

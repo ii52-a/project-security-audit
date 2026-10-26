@@ -1,55 +1,122 @@
-# 专项审查提示词（复核轮用）
+# Targeted Review Prompts (Second Pass)
 
-第一轮全量扫描后，对高风险模块做第二轮深挖时，把对应类别的提示词代入具体代码上下文逐条自查。用法：选定类别 → 读相关源文件 → 对每条问句给出"确认安全/确认有问题/无法确定"三选一的结论，无法确定的列入"需人工复核"。不允许跳过问句不作答。
+After the first full scan, use these category prompts for a second pass on high-risk
+modules. Apply each prompt to the actual code context. For every question, produce exactly
+one of: **Confirmed safe**, **Confirmed issue**, or **Cannot determine**. Put "Cannot
+determine" items under "manual review required". Do not skip a question.
 
-## 通用复核提示词（对任何文件）
+## Universal review prompt (any file)
 
-> 逐行审读以下文件，假设攻击者可以控制所有外部输入（HTTP 参数、请求头、文件内容、消息队列消息、第三方 API 响应、环境变量之外的任何来源）。对每一个"数据从入口流向危险操作"的路径，写出：入口 → 途经的每一次变换 → 到达的 sink。没有可达危险路径的文件明确说"无可达 sink"。
+> Read the following files line by line, assuming the attacker controls every external
+> input: HTTP parameters, headers, file contents, message-queue messages, third-party API
+> responses, and any source other than environment variables. For every path where data
+> flows from an entry point to a dangerous operation, write: entry point → every
+> transformation along the path → sink. If no reachable dangerous path exists, state
+> explicitly: "no reachable sink".
 
-## 类别 1：注入与命令执行
+## Category 1: Injection and command execution
 
-> 在这些文件中，搜索所有进入 SQL、命令、eval/动态代码、模板引擎、反序列化的调用点。对每个调用点回答：(a) 参数里有没有用户可控部分？(b) 有哪一层防护（参数绑定/白名单/转义），该防护能否被绕过（如二次解码、编码差异、字段名拼接）？(c) 若注入成功，能拿到什么（同库任意读？RCE？）。宁可标可疑，不可放过。
+> In these files, find every call site that reaches SQL, a shell command, `eval` or dynamic
+> code, a template engine, or deserialization. For each call site, answer: (a) Which parts
+> of the arguments are user-controlled? (b) What protection exists (parameter binding,
+> allowlist, escaping), and can it be bypassed (double decoding, encoding differences,
+> field-name concatenation)? (c) If injection succeeds, what can the attacker obtain
+> (arbitrary read from the same database? RCE?). Mark suspicious rather than dismiss.
 
-## 类别 2：认证与会话
+## Category 2: Authentication and sessions
 
-> 完整跟踪一次登录流程：密码如何校验、session/token 如何生成与签发、存哪里、如何随请求校验、如何失效。对以下问题逐条作答：token 是否可伪造（secret 来源、算法固定吗）？登出/改密后旧 token 还能用吗？"记住我"有效期多长、能否被窃取后长期复用？登录失败信息会帮助枚举账号吗？有没有接口用 cookie 身份但可被 CSRF？
+> Trace one complete login flow: how the password is verified, how the session or token is
+> generated and signed, where it is stored, how it is validated on each request, and how it
+> is invalidated. Answer each question: Can the token be forged (secret source, fixed
+> algorithm)? Does an old token still work after logout or password change? How long is
+> "remember me" valid, and can a stolen token be reused long-term? Does the login-failure
+> message help enumerate accounts? Is there an endpoint that authenticates by cookie but is
+> vulnerable to CSRF?
 
-## 类别 3：越权（IDOR）
+## Category 3: Authorization (IDOR)
 
-> 列出所有形如"按 ID 取/改/删资源"的接口。对每一个：找到它的数据查询语句，确认查询条件里除了 ID 是否还绑定了属主或角色；没有绑定的，直接判定为水平越权候选，并写出利用步骤。管理接口单独列一张表：路径 + 鉴权中间件名 + 中间件实际校验了什么。
+> List every endpoint of the form "fetch/update/delete a resource by ID". For each one,
+> locate the data query and confirm whether the `WHERE` clause binds the owner or role in
+> addition to the ID. If it does not, classify it as a horizontal-privilege-escalation
+> candidate and write the exploitation steps. For administrative endpoints, produce a
+> separate table: path + authentication middleware name + what the middleware actually
+> validates.
 
-## 类别 4：密钥与敏感数据
+## Category 4: Secrets and sensitive data
 
-> 假设仓库即将公开。逐个文件回答：这个文件里有没有公开后会造成直接损失的内容（密钥、密码、内网地址、客户数据、内部域名）？同时回答：攻击者拿到其中任意一个密钥后能进入哪个系统、能造成多大影响？给出每个已发现密钥的"轮换步骤"。
+> Assume the repository will become public. For each file, answer: Does it contain anything
+> that would cause direct loss if published (keys, passwords, internal addresses, customer
+> data, internal hostnames)? Also answer: If an attacker obtained any one of these secrets,
+> which system could they enter, and what impact could they cause? Provide rotation steps
+> for every discovered secret.
 
-## 类别 5：文件与上传
+## Category 5: Files and uploads
 
-> 跟踪一个上传文件的完整生命周期：前端如何传 → 服务端如何校验（扩展名？MIME？magic bytes？）→ 存到哪、用什么名字 → 之后如何被访问/执行。逐个环节回答"绕过方法"：双扩展名、大小写、分号截断、Content-Type 伪造、图片马、解压路径穿越。下载/读取接口对 `../`、绝对路径、URL 编码（%2e%2e）是否免疫？
+> Trace the full lifecycle of an uploaded file: how the front end sends it → how the server
+> validates it (extension? MIME? magic bytes?) → where it is stored and under what name →
+> how it is later accessed or executed. For each stage, describe bypasses: double
+> extensions, case variation, semicolon truncation, Content-Type spoofing, polyglot images,
+> and archive path traversal. Are download/read endpoints immune to `../`, absolute paths,
+> and URL encoding (`%2e%2e`)?
 
-## 类别 6：SSRF 与出网请求
+## Category 6: SSRF and outbound requests
 
-> 找到所有服务端主动发起 HTTP 请求的代码。对每个：URL 的哪些部分来自用户输入？是否限制协议（file://、gopher://）与目标（内网 IP、云元数据 169.254.169.254）？是否跟随重定向（重定向可绕过初次校验）？DNS 解析后是否复查 IP（rebinding）？
+> Find every place where the server initiates an HTTP request. For each one: Which parts of
+> the URL are user-controlled? Are protocols (`file://`, `gopher://`) and destinations
+> (internal IPs, cloud metadata `169.254.169.254`) restricted? Are redirects followed (a
+> redirect can bypass initial validation)? Is the resolved IP re-checked after DNS
+> resolution (rebinding)?
 
-## 类别 7：业务逻辑滥用
+## Category 7: Business-logic abuse
 
-> 站在"想薅羊毛/想白嫖"的用户角度审查：注册有没有人机校验？优惠券/邀请奖励能否刷？支付金额是前端传还是服务端算？并发请求同一优惠券会超发吗（幂等与锁）？短信/邮件接口能被当轰炸器用吗？试用/退款流程有没有"先退款后收货"型漏洞？
+> Review from the perspective of a user trying to exploit promotions or obtain goods for
+> free: Is there human-verification on registration? Can coupons or referral rewards be
+> farmed? Is the payment amount supplied by the client or computed by the server? Can
+> concurrent requests to the same coupon oversell it (idempotency and locking)? Can SMS or
+> email endpoints be used as a bombing service? Do trial or refund flows contain
+> "refund-before-receipt" defects?
 
-## 类别 8：依赖与供应链
+## Category 8: Dependencies and supply chain
 
-> 对依赖清单逐个包回答：版本是否落在已知 CVE 区间（能联网则用 npm audit/pip-audit 核实，不能则凭知识标注）？这个包是否还在维护？它是否只用到一小部分功能（可否用标准库替代以缩供应链）？构建脚本与 postinstall 有无可疑网络行为？
+> For each package in the dependency manifest, answer: Does the version fall inside a known
+> CVE range (verify with npm audit/pip-audit when online; otherwise mark it as
+> knowledge-based)? Is the package still maintained? Does the project use only a small part
+> of it (could the standard library replace it and shrink the supply chain)? Do build
+> scripts and `postinstall` perform suspicious network activity?
 
-## 类别 9：部署与配置复核
+## Category 9: Deployment and configuration review
 
-> 以"刚拿到服务器 shell 的攻击者"视角复查部署配置：容器以什么用户跑、能读到哪些挂载？数据库端口绑在哪？备份文件放哪、谁能下载？日志里现在正记着哪些敏感信息？这台机器失陷后，横向能到哪（其它服务凭据、共享网络）？把每个答案写成影响链。
+> Review deployment configuration from the perspective of an attacker who just obtained a
+> shell on the server: Which user does the container run as, and which mounts can it read?
+> Where is the database port bound? Where are backups stored, and who can download them?
+> What sensitive information is currently written to logs? After this host is compromised,
+> where can the attacker move laterally (other service credentials, shared networks)?
+> Write each answer as an impact chain.
 
-## 类别 10：密码学与随机数
+## Category 10: Cryptography and randomness
 
-> 找到所有加密、哈希、签名、随机数生成的调用点。对每个回答：算法与模式是什么（MD5/SHA1/ECB/复用 IV = 直接标可疑）？密钥/盐从哪来、多久轮换？签名与摘要比较用的是恒定时间比较还是 ==？token/验证码/重置链接的随机源是 CSPRNG 还是 Math.random/random.random？把"可预测 token 能伪造什么"写成具体场景。
+> Find every call site for encryption, hashing, signing, and random-number generation. For
+> each one, answer: What algorithm and mode are used (MD5/SHA-1/ECB/reused IV = suspicious
+> immediately)? Where do keys and salts come from, and how often are they rotated? Are
+> signatures and digests compared in constant time or with `==`? Is the randomness source
+> for tokens, CAPTCHAs, and reset links a CSPRNG or `Math.random`/`random.random`? Describe
+> concrete scenarios for what a predictable token can forge.
 
-## 类别 11：竞态与幂等
+## Category 11: Race conditions and idempotency
 
-> 找到所有"先查后写"的资金/库存/权益变更路径。对每个回答：读-改-写是原子的吗（有乐观锁/条件 UPDATE/唯一约束兜底吗）？同一请求重复投递（支付回调、MQ 重试）会重复生效吗，幂等键在哪？分布式部署下还有进程内锁在保护共享资源吗？每个非原子点标注"15 并发能否超发"——这是阶段 7 竞态攻击的靶子。
+> Find every "read then write" path that changes money, inventory, or entitlements. For each
+> one, answer: Is the read-modify-write atomic (optimistic lock, conditional UPDATE, or
+> unique constraint)? Does redelivery of the same request (payment callback, MQ retry)
+> apply twice, and where is the idempotency key? In a distributed deployment, is an
+> in-process lock still protecting a shared resource? Mark every non-atomic point with
+> "can 15 concurrent requests oversell?" — that is the target for Stage 7 race testing.
 
-## 类别 12：LLM/Agent 应用
+## Category 12: LLM and agent applications
 
-> 对每个模型调用点回答：system prompt 里有没有会被诱导输出的秘密（内部规则、凭据、内部接口）？用户输入与检索文档是否被拼接进同一段指令（间接注入面）？模型输出流向哪——eval/SQL/shell/支付工具，有没有消毒与白名单？高危工具（删除、群发、支付）有无人工确认？单用户 token/调用上限是多少？知识源普通用户能写吗？每个"是"都写成注入后可造成的具体后果。
+> For every model invocation point, answer: Does the system prompt contain secrets that can
+> be induced to leak (internal rules, credentials, internal endpoints)? Are user input and
+> retrieved documents concatenated into the same instruction (indirect-injection surface)?
+> Where does model output go — `eval`, SQL, shell, or payment tools — and is it sanitized
+> and allow-listed? Do high-risk tools (deletion, bulk messaging, payment) require human
+> confirmation? What is the per-user token or call limit? Can ordinary users write to the
+> knowledge source? For every "yes", write the concrete consequence of injection.

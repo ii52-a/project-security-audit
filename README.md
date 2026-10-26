@@ -1,92 +1,117 @@
 # project-security-audit
 
-`security-audit` 是一个用于项目安全审核的 AI skill：静态审查 + AI 自攻击验证 + 漏洞情报核对，输出带评分、P0–P3 分级和修复路线图的报告。
+`security-audit` is a security-audit skill for AI agents: static review, authorized
+AI-driven attack validation, vulnerability-intelligence correlation, risk scoring, and an
+actionable remediation report.
 
-当前版本：**alpha1.1**
+Current version: **alpha1.2**
 
-## 适用场景
+## Language layout
 
-- 项目上线/发版前的安全审核
-- 接手陌生项目时的第一轮安全测绘
-- 密钥/硬编码、接口越权、依赖 CVE、部署配置检查
-- 发布前快速自审查（A 档），以及迭代内/月度复查（B/C 档）
-- 需要一份可执行、可复核的安全报告，而不是零散建议
+- **English is authoritative for execution.** `SKILL.md`, `references/*.md`, this README,
+  and `CHANGELOG.md` are the machine-facing specification.
+- **Chinese is the human-facing manual.** The synchronized Chinese reading version lives in
+  `.chinese/`. Agents do not need to read it for execution; it is provided for Chinese
+  readers who want the narrative in Chinese.
+- If the two versions disagree, the English files prevail.
 
-## 目录结构
+## Use cases
+
+- Pre-release security review of a project
+- First-pass security reconnaissance when taking over an unfamiliar codebase
+- Secret and hard-coded credential checks, API authorization review, dependency CVE review,
+  and deployment configuration review
+- Pre-release quick self-review (A-track), in-iteration gates (B-track), and monthly deep
+  review (C-track)
+- Producing a reproducible security report instead of scattered advice
+
+## Repository layout
 
 ```text
 .
-├── SKILL.md                    # 主流程与报告规范（十阶段）
+├── SKILL.md                     # authoritative workflow and report contract (English)
 ├── VERSION
 ├── CHANGELOG.md
-├── references/
-│   ├── server-vulns.md         # 服务器与运行环境漏洞
-│   ├── api-audit.md            # 接口审查
-│   ├── secrets-hijack.md       # 密钥、硬编码与劫持
-│   ├── advanced-risks.md       # 密码学、竞态、LLM、云、供应链等
-│   ├── vuln-intel.md           # 近期漏洞情报
-│   ├── attack-testing.md       # 授权门、红线与自攻击手册
-│   ├── risk-standards.md       # P0–P3、五维评分、结论判定
+├── README.md
+├── references/                  # English execution references
+│   ├── server-vulns.md
+│   ├── api-audit.md
+│   ├── secrets-hijack.md
+│   ├── advanced-risks.md
+│   ├── vuln-intel.md
+│   ├── attack-testing.md
+│   ├── risk-standards.md
 │   ├── structure-optimization.md
 │   ├── performance.md
-│   ├── audit-prompts.md        # 12 类复核提示词
-│   └── self-review.md          # 快速自审查 A/B/C 档
+│   ├── audit-prompts.md
+│   └── self-review.md
 ├── scripts/
-│   ├── scan_secrets.py         # 跨平台密钥/凭据扫描（首选）
-│   ├── self_check.py           # 跨平台发布前自检（首选，支持 --strict）
-│   ├── scan_secrets.sh         # bash 备选
-│   └── self_check.sh           # bash 备选
+│   ├── scan_secrets.py          # cross-platform scanner (preferred)
+│   ├── self_check.py            # cross-platform quick check (preferred; --strict)
+│   ├── scan_secrets.sh          # bash fallback
+│   └── self_check.sh            # bash fallback
 ├── tests/
-│   └── test_smoke.py           # Python 回归测试（临时夹具，不含真实密钥）
-└── .github/workflows/ci.yml    # Linux/Windows + Python 3.9/3.12 CI
+│   └── test_smoke.py
+├── .github/workflows/ci.yml
+└── .chinese/                    # Chinese human manual; not needed by agents
+    ├── README.md
+    ├── SKILL.md
+    ├── CHANGELOG.md
+    └── references/
 ```
 
-## 使用方式
+The `.chinese/` directory is intentionally hidden from the normal reading path. It is a
+human manual, not a second execution specification. Do not load it as context for an audit
+unless the user explicitly asks for the Chinese version.
 
-把整个 `security-audit/` 目录放进项目的 `.agents/skills/` 下，或在支持 skill 的 agent 中加载 `SKILL.md`。
-
-常用触发语：
-
-- “对这个项目做一次完整安全审核”
-- “上线前帮我检查一下”
-- “扫描一下有没有硬编码密钥”
-- “模拟攻击者打一遍这个项目”
-- “做一次发布前自审查”
-
-完整审核默认按 `SKILL.md` 的阶段 1–10 执行；只做发布前快速自检时，走 `references/self-review.md` 的 A 档。
-
-## 快速开始
+## Quick start
 
 ```bash
-# 发布前自检（有 FAIL 时返回非零，适合 CI）
-python scripts/self_check.py <项目目录> --strict
+# Pre-release check; non-zero exit on FAIL, suitable for CI
+python scripts/self_check.py <project-dir> --strict
 
-# 只跑密钥扫描（JSON 便于二次处理）
-python scripts/scan_secrets.py <项目目录> --json
+# Secret scan with JSON output
+python scripts/scan_secrets.py <project-dir> --json
 
-# 修改脚本后跑回归
+# Regression tests after changing rules or scripts
 python -m unittest discover -s tests -v
 ```
 
-Windows、Linux、macOS 均可直接运行 Python 脚本。bash 版需要 Linux/macOS 或 Git Bash；Windows 系统自带的 `bash.exe` 可能是 WSL 启动器，不应当作可用 shell。
+The Python tools run on Windows, Linux, and macOS. The bash tools require Linux, macOS, or
+Git Bash. On Windows, the built-in `bash.exe` may be a WSL launcher without a distribution;
+do not assume it is usable.
 
-## 依赖
+## Requirements
 
-- 静态审核与快速自检：Python 3.9+
-- bash 备选脚本：bash 4+、`grep`、`find`
-- 完整动态测试：`curl`（命令模板以 bash 语法给出，Windows 用 Git Bash 或等价改写）
-- 依赖审计（可选）：`npm`、`pip-audit`、`govulncheck`、`cargo`、`composer`
-- 动态测试仅在用户明确授权的本地/测试环境执行
+- Python 3.9+ for static review and quick checks
+- bash 4+, `grep`, and `find` only when using the bash fallbacks
+- `curl` for dynamic testing; command templates use bash syntax, so use Git Bash on Windows
+  or translate them to equivalent PowerShell
+- Optional dependency-audit tools: `npm`, `pip-audit`, `govulncheck`, `cargo`, `composer`
+- Dynamic testing is permitted only in a user-authorized local or test environment
 
-## 安全边界
+## Safety boundaries
 
-- 静态审查不修改、不删除项目文件
-- 动态攻击测试必须同时满足：授权明确、环境隔离、红线之内
-- 禁止破坏性 payload、拒绝服务式压测、攻击第三方、触碰真实用户数据
-- LLM 工具滥用测试只允许 mock/dry-run/一次性测试租户，禁止真实删除、群发、支付
-- 报告默认写入 `security-reports/`，并做密钥/PII 脱敏；原始证据不提交 git
+- Static review does not modify or delete project files.
+- Dynamic attack testing requires explicit authorization, environment isolation, and red-line
+  compliance.
+- Destructive payloads, denial-of-service testing, third-party attacks, and access to real
+  user data are prohibited.
+- LLM tool-abuse tests may use only mock tools, dry-run tools, or a disposable tenant; real
+  deletion, bulk messaging, and payment are prohibited.
+- Reports are written to `security-reports/` and redacted; raw evidence is never committed.
 
-## 版本
+## Versions
 
-- **alpha1.1** — 修复一致性与安全问题；新增跨平台 Python 工具、回归测试与 CI；报告增加脱敏、覆盖边界和附录规范。
-- **alpha1.0** — 初始版本：十阶段审核流程、11 个参考文件、2 个 bash 脚本、完整报告模板与 A/B/C 自审查节奏。
+- **alpha1.2** — English-first migration. The English `SKILL.md` and `references/` are the
+  authoritative execution specification; the Chinese manual is synchronized under
+  `.chinese/`. No changes to detection behavior.
+- **alpha1.1** — Safety and consistency fixes; cross-platform Python tools; regression tests
+  and CI; report redaction, coverage boundaries, and appendix contracts.
+- **alpha1.0** — Initial snapshot: ten-stage workflow, 11 reference files, two bash scripts,
+  report template, and A/B/C self-review cadence.
+
+## License
+
+No license has been declared. Add one before redistribution if required by your
+organization.

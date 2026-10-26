@@ -1,172 +1,345 @@
 ---
 name: security-audit
-description: 对项目目录进行全面安全审核、评估与自攻击测试。当用户要求安全审核、安全审计、安全评估、漏洞扫描、渗透测试、攻击测试、自攻击/红队演练、检查密钥/密码泄露、硬编码检查、接口安全审查、项目风险评估、近期漏洞/CVE 情报核查、项目自审查/自查/安全自检、结构评估或性能分析时使用本 skill——即使用户没有明确说"安全"两个字（例如"帮我看看这个项目有没有问题"、"上线前检查一下"、"模拟攻击者打一遍这个项目"、"最近有什么新漏洞会影响我们"）。
+description: >-
+  Perform a structured security audit of a project directory: static review, authorized
+  AI-driven attack validation, vulnerability-intelligence checks, risk scoring, and an
+  actionable report. Use for security audits, security assessments, vulnerability scans,
+  penetration/red-team exercises, secret or hard-coded credential checks, API security
+  reviews, project risk assessments, recent CVE checks, pre-release self-reviews, and
+  structure or performance reviews. Also use when the user asks informal questions such
+  as "check this project for problems", "review it before launch", "attack it like an
+  attacker", or "what recent vulnerabilities affect us", even if the word "security" is
+  not used. The user may write in any language; map equivalent requests to this workflow.
 ---
 
-# 项目安全审核 (Security Audit)
+# Security Audit Skill
 
-对指定目录执行结构化的安全审核，包含静态审查 + AI 自攻击动态验证，输出一份带评分、风险分级和可执行修复建议的报告。
+> **Agent execution note.** This file and `references/*.md` are the authoritative
+> English specification for execution. `.chinese/` contains the Chinese human-facing
+> manual. Agents MUST NOT read or use `.chinese/` as execution context unless the user
+> explicitly asks for the Chinese text. If the English and Chinese versions disagree,
+> the English version prevails.
 
-## 执行环境
+## 1. Purpose
 
-- 静态审核只需要文件读取能力；脚本优先用 Python 3.9+（`python scripts/*.py`），Windows / Linux / macOS 通用。
-- `scripts/*.sh` 是 bash 版实现，作为 Linux/macOS 与 Git Bash 的备选；Windows 上不要把系统自带的 `bash.exe`（WSL 启动器）当作可用 shell。
-- 动态测试还需要 `curl`；可选 `jq`、`python`。命令模板以 bash 语法给出，Windows 请用 Git Bash，或按语义等价改写为 PowerShell。
-- 依赖审计工具（`npm`、`pip-audit`、`govulncheck`、`trivy`）按项目技术栈可选安装；不可用时在报告中注明"未执行"。
+Audit a target directory end to end: static review, authorized dynamic validation,
+vulnerability-intelligence correlation, risk scoring, and a report with reproducible
+evidence and a remediation roadmap.
 
-## 总原则
+The audit produces one Markdown report. Findings MUST be evidence-based. Speculation
+MUST be labeled as requiring manual review, never presented as a confirmed vulnerability.
 
-- **只读审核（静态）**：静态审查阶段不修改、不删除项目文件。修复建议只写在报告中；动态测试产生的 canary/测试账号必须在结束时清理。
-- **先定范围与预算**：开始前确认审核目录、排除项、时间/文件数上限与抽样规则。报告必须列出"未覆盖项"，不能把"没查到"写成"没有"。
-- **证据优先**：每个发现必须附带 `文件路径:行号` 和问题代码摘录（静态）或请求/响应记录（动态），禁止无证据的猜测。无法确认的项标记为"需人工复核"。
-- **证据脱敏**：报告中的密钥只保留前后各 4 位，token/cookie/password 全部打码，手机号/邮箱/身份证等 PII 做掩码；完整证据只留在受控的本地文件，不进入版本库。
-- **宁全勿漏**：按检查清单逐项过，没发现问题的项也要在报告"已检查无异常"中体现；同时列出未检查项及其原因。
-- **区分严重度**：按 P0–P3 分级（标准见 [references/risk-standards.md](references/risk-standards.md)）。
-- **自攻击三前提**：动态攻击测试仅在同时满足以下条件时执行——①授权明确（用户自有的本地/测试环境，用户已同意攻击测试）；②环境隔离（不含真实用户数据、不连生产数据库）；③红线之内（禁破坏性 payload、禁拒绝服务式压测、禁超量请求，详见 attack-testing.md）。任一条件不满足则跳过动态测试，只做静态审核并在报告注明原因。
+## 2. Normative operating rules
 
-## 审核工作流（十阶段）
+The keywords MUST, MUST NOT, SHOULD, SHOULD NOT, and MAY are used as defined in RFC 2119.
 
-阶段 1–9 是主流程；阶段 10 是对高风险模块的复核轮，可按风险裁剪，但裁掉时要在"未覆盖项"中说明。
+- **RO-1 — Static review is read-only.** During static review, do not modify or delete
+  project files. Remediation is written in the report only. Dynamic tests may create
+  temporary data, but all canaries, test accounts, roles, listeners, and temporary files
+  MUST be removed during cleanup.
+- **RO-2 — Evidence before conclusions.** Every finding MUST include either a
+  `file:line` reference with a code excerpt, or an HTTP request/response or command
+  transcript for dynamic evidence. Do not report a finding that you cannot locate or
+  reproduce. Mark unconfirmed items as `MANUAL REVIEW REQUIRED`.
+- **RO-3 — Redact before persistence.** Reports MUST mask credentials, tokens, cookies,
+  and personal data. Retain at most the first and last four characters of a secret;
+  replace `Authorization`, `Cookie`, `Set-Cookie`, password, and token values with
+  `[REDACTED]`; mask phone numbers, email addresses, national IDs, and bank cards. Raw
+  evidence MUST remain in an access-controlled local location and MUST NOT be committed.
+- **RO-4 — Define scope and coverage.** Before starting, establish the target directory,
+  exclusions, file/time budget, and sampling rules. The report MUST include a
+  "Scope and limitations" section listing what was not examined and why. "Not found"
+  MUST NOT be reported as "not present".
+- **RO-5 — Dynamic testing requires all three preconditions.** Do not execute dynamic
+  attack tests unless all of the following hold simultaneously:
+  1. **Authorization.** The target is a local or test environment owned by the user, and
+     the user has explicitly authorized attack testing.
+  2. **Isolation.** The target does not contain real user data and does not connect to a
+     production database or production third-party accounts.
+  3. **Within red lines.** All tests comply with the non-destructive payload, rate-limit,
+     and no-third-party rules in `references/attack-testing.md`.
+  If any precondition fails, skip dynamic testing, perform static review only, and record
+  the reason in the report.
+- **RO-6 — Stop on production indicators.** If you detect a real domain, a public
+  production database, real user records, or any other production indicator, terminate
+  dynamic testing immediately, even if the environment is already running.
+- **RO-7 — Report placement.** Write the report to `security-reports/<project>-<date>.md`
+  or a user-specified location. Confirm that the destination is writable and is not
+  committed to version control. If the user requires the report inside the audited
+  repository, warn about `.gitignore` and obtain consent before writing.
+- **RO-8 — Fail closed.** If a scanner, dependency-audit tool, or required command fails,
+  record a failure or warning; do not reinterpret the failure as a clean result.
 
-### 阶段 1：项目测绘（Recon）
+## 3. Execution environment
 
-1. 列出目标目录结构（树状，深度 3–4 层），识别技术栈（框架、语言、构建工具、部署配置）。
-2. 定位关键文件：入口文件、路由/接口定义、配置文件（`.env`、`config.*`、`docker-compose.yml`、`nginx.conf` 等）、依赖清单、CI/CD 配置、Dockerfile。
-3. 识别对外暴露面：监听端口、Web 服务、API 路由、静态资源目录、管理后台。
-4. 把测绘结果写进报告的"项目概况"，后续阶段都依赖它。
+- Static review requires only file-read access.
+- Prefer the Python tools (`python scripts/*.py`), which support Windows, Linux, and
+  macOS and require Python 3.9 or newer.
+- `scripts/*.sh` are bash fallbacks for Linux, macOS, and Git Bash. On Windows, do not
+  assume that the system `bash.exe` is usable; it may be a WSL launcher without a
+  distribution.
+- Dynamic testing additionally requires `curl`. Optional tools: `jq`, `python`.
+- Dependency-audit tools (`npm`, `pip-audit`, `govulncheck`, `cargo`, `composer`) are
+  optional and depend on the project stack. If a tool is unavailable, record
+  `NOT EXECUTED` in the report.
+- Commands in the references use bash syntax. On Windows, use Git Bash or translate them
+  to equivalent PowerShell without changing their semantics.
 
-### 阶段 2：密钥与硬编码扫描
+## 4. Workflow (ten stages)
 
-1. 优先运行 `python scripts/scan_secrets.py <目标目录>`（跨平台）；没有 Python 时用 `bash scripts/scan_secrets.sh <目标目录>`。得到候选泄露点列表（正则覆盖各云厂商 AK/SK、私钥、连接串、JWT secret、各平台 token 等 20+ 类规则）。
-2. **逐条人工确认**脚本结果——正则有误报（示例代码、测试 fixture、占位符 `xxx`），也检查脚本扫不到的模式：日志打印敏感信息、前端产物里的内网地址、错误堆栈暴露路径。
-3. 同时检查 `.gitignore` 覆盖、git 历史泄露（已提交即视为泄露，需轮换）。
-4. 详细检查项见 [references/secrets-hijack.md](references/secrets-hijack.md)。
+Stages 1–9 are the main workflow. Stage 10 is a review pass for high-risk modules. Stage
+10 MAY be scoped down, but any skipped scope MUST appear in "Scope and limitations".
 
-### 阶段 3：服务器与运行环境漏洞
+### Stage 1 — Reconnaissance
 
-按 [references/server-vulns.md](references/server-vulns.md) 检查：注入类、认证/会话、授权、文件处理、SSRF/CSRF、安全响应头、TLS、容器与部署配置、依赖漏洞。
+1. List the target tree to depth 3–4 and identify the stack: language, framework, build
+   tool, runtime, and deployment configuration.
+2. Locate entry points, route and interface definitions, configuration files (`.env`,
+   `config.*`, `docker-compose.yml`, `nginx.conf`), dependency manifests and lock files,
+   CI/CD configuration, and Dockerfiles.
+3. Identify the external attack surface: listening ports, web services, API routes,
+   static asset directories, and administrative interfaces.
+4. Write the results into the report's "Project overview" section. Later stages depend on
+   this baseline.
 
-### 阶段 4：项目接口审查
+**Exit criterion:** the project overview identifies the stack, entry points, exposed
+surface, and key configuration files.
 
-1. 枚举全部接口（路由、RPC、WebSocket 事件、定时任务、CLI 入口），生成接口清单。
-2. 对每个接口回答四个问题：**谁能调？输入校验了吗？输出脱敏了吗？有频率限制吗？**
-3. 按 [references/api-audit.md](references/api-audit.md) 逐项检查认证、越权、输入输出处理、CORS、文件上传下载、限流防刷、回调验签。此阶段产出的"疑似漏洞清单"是阶段 7 攻击假设的主要来源。
+### Stage 2 — Secrets and hard-coded credentials
 
-### 阶段 5：进阶风险扫描
+1. Run `python scripts/scan_secrets.py <target>` (preferred, cross-platform). If Python
+   is unavailable, run `bash scripts/scan_secrets.sh <target>`. The rules cover cloud
+   access keys, private keys, connection strings, JWT secrets, platform tokens, and
+   related patterns (20+ rule classes).
+2. Manually confirm every candidate. Regex rules produce false positives (examples,
+   fixtures, placeholders such as `xxx`) and miss patterns such as sensitive values in
+   logs, internal addresses in front-end bundles, and paths in error stacks.
+3. Check `.gitignore` coverage and Git history. A secret that was ever committed MUST be
+   treated as compromised and rotated; deleting the file alone is not remediation.
+4. Follow `references/secrets-hijack.md` for the full checklist.
 
-按 [references/advanced-risks.md](references/advanced-risks.md) 检查常规清单覆盖不到的深度维度：密码学误用、竞态与并发缺陷、LLM/AI 应用特有风险（提示注入、工具滥用、智能体越权）、GraphQL/ WebSocket、微服务内部信任、云与 IAM、前端深水区（postMessage/localStorage/source map）、移动端、供应链投毒。
+**Exit criterion:** every scanner candidate is classified as confirmed, false positive,
+or manual review; Git history and ignored files are checked.
 
-### 阶段 6：近期漏洞情报搜索
+### Stage 3 — Server and runtime vulnerabilities
 
-按 [references/vuln-intel.md](references/vuln-intel.md)：
+Use `references/server-vulns.md` to check injection classes, authentication and session
+management, authorization, file handling, SSRF/CSRF, security headers, TLS, container and
+deployment configuration, and dependency vulnerabilities.
 
-1. 从阶段 1 测绘与 lock 文件提取带精确版本的组件清单。
-2. 有网先跑自动审计（`npm audit --omit=dev` / `pip-audit` / `govulncheck`），再 Web 搜索补充近期 CVE 与安全通告（优先厂商公告、GitHub Advisory/NVD，标 ⚡ 在野利用项）。
-3. 逐条核对"影响版本区间 vs 本项目实际版本 vs 触发条件"，生成情报汇总表；评级映射进主发现表。
-4. 受影响且有公开 PoC 的注入/RCE 类漏洞 → 追加为阶段 7 攻击假设（非破坏版 PoC，守红线）。
+**Exit criterion:** each category in the checklist has an explicit result or a recorded
+justification for omission.
 
-### 阶段 7：AI 自攻击测试（动态验证）
+### Stage 4 — Interface review
 
-**先读 [references/attack-testing.md](references/attack-testing.md) 的授权门与红线，通过后再执行。** 流程概要：
+1. Enumerate every interface: routes, RPC methods, GraphQL operations, WebSocket events,
+   message-queue consumers, scheduled jobs, and CLI entry points.
+2. For each interface, answer four questions: **Who can call it? Is input validated? Is
+   output redacted? Is it rate-limited?**
+3. Use `references/api-audit.md` to check authentication, authorization and object-level
+   access control, input and output handling, CORS, file upload/download, rate limiting,
+   and webhook signature verification. The resulting suspected-vulnerability list is the
+   primary input to Stage 7.
 
-1. **授权检查**：确认目标是用户自有的本地/测试环境且用户同意攻击测试；发现生产特征（真实域名、生产数据库、真实用户数据）立即终止动态测试。
-2. **环境准备**：在隔离环境启动应用，注册两个测试账号（A/B，用于越权测试），建立基线响应；开始前提醒用户提交当前改动或打 tag，便于测试后 `git diff` 复核与回滚。
-3. **攻击假设**：汇总阶段 3–6 的静态疑点与情报命中 + 攻击手册的标准技术，形成带编号的假设清单。
-4. **执行攻击**：按手册逐项验证——认证绕过、IDOR 枚举、注入（非破坏 payload + canary 标记）、SSRF 回连（自建监听器拿实锤）、限流探测、竞态复现、mass assignment、开放重定向、CORS 等。每次攻击记录完整请求/响应。
-5. **清理现场**：删除 canary 数据与测试账号，恢复被 mass assignment 修改的角色/权限，停止监听器与服务，清理 cookie jar 与临时文件。
-6. 产出三类结论：**已确认**（附动态证据）、**已排除**（静态疑点未复现，从报告中降级或移除）、**无法验证**（注明原因）。
+**Exit criterion:** the interface inventory is complete and stored in Appendix A; each
+interface has answers to the four questions.
 
-### 阶段 8：风险评估与评分
+### Stage 5 — Advanced risk review
 
-按 [references/risk-standards.md](references/risk-standards.md)：
+Use `references/advanced-risks.md` to cover dimensions that the basic checklists do not:
+cryptography misuse, race conditions and concurrency defects, LLM/AI application risks
+(prompt injection, tool abuse, excessive agency), GraphQL and WebSocket, internal trust
+in microservices, cloud and IAM, front-end risks (postMessage, localStorage, source maps),
+mobile clients, and supply-chain attacks.
 
-1. 把静态、动态与情报发现归入 P0–P3；**动态已验证的发现标记 [已验证]，评级不可下调**；动态未复现的静态疑点标注"未复现"，最多降半级，且仅当该攻击确实覆盖了对应路径。
-2. 从攻击面、认证体系、数据保护、依赖健康、运维能力五个维度打分（加权总分 0–100）；每个扣分项在"评分明细"中写明对应发现编号。
-3. 按 `risk-standards.md` 第 4 节的判定顺序给出总体结论：先看"不可上线"硬红线，再看"修复后上线"，最后才允许"可上线"。
+**Exit criterion:** each section of the advanced checklist is marked checked, not
+applicable, or manual review required.
 
-### 阶段 9：结构、优化与性能分析
+### Stage 6 — Recent vulnerability intelligence
 
-1. 按 [references/structure-optimization.md](references/structure-optimization.md) 评估项目结构合理性，列出优化条例。
-2. 按 [references/performance.md](references/performance.md) 罗列性能问题与优化建议（分析建议，不是漏洞，不与 P 级问题混排）。
+Use `references/vuln-intel.md`.
 
-### 阶段 10：审查提示词（复核轮）
+1. Extract a component inventory with exact versions from the Stage 1 inventory and lock
+   files. Do not rely on loose ranges in manifests.
+2. If network access is available, run the relevant automated audit first
+   (`npm audit --omit=dev`, `pip-audit`, `govulncheck`, `cargo audit`, `trivy fs`), then
+   search vendor advisories, GitHub Security Advisories, and NVD for recent CVEs. Mark
+   entries with known in-the-wild exploitation with `[EXPLOITED]`.
+3. For every candidate, verify the affected version range against the actual version and
+   check whether the triggering condition applies. Record the result in the intelligence
+   table.
+4. For affected injection or RCE issues with a public proof of concept, add a
+   non-destructive, red-line-compliant attack hypothesis to Stage 7. If a safe variant is
+   impossible, perform static confirmation only and mark it `NOT TESTED`.
 
-对高风险模块做第二轮深挖时，直接使用 [references/audit-prompts.md](references/audit-prompts.md) 中的专项审查提示词（12 类，含密码学、竞态、LLM/Agent），逐条代入代码上下文自查，避免第一轮遗漏。
+**Exit criterion:** every component with a candidate CVE has a version/condition verdict:
+affected, not affected, or manual review required.
 
-## 快速模式：项目自审查
+### Stage 7 — Authorized dynamic validation
 
-用户说"自审查 / 自查 / 安全自检 / 发布前检查"而未要求完整审核时，不跑完整十阶段，走 [references/self-review.md](references/self-review.md) 的快速模式：
+**Read the authorization gate and red lines in `references/attack-testing.md` before
+executing any command.**
 
-1. 优先运行 `python scripts/self_check.py <项目目录>`（跨平台，`--strict` 时 FAIL 返回非零）；没有 Python 时用 `bash scripts/self_check.sh <项目目录>`。检查密钥扫描 + 依赖审计 + git 卫生 + 调试开关 + 危险部署默认值，输出 PASS/WARN/FAIL 汇总。
-2. `git diff` 筛出自上次发版以来触及 auth/upload/pay/config 的变更，逐文件过四问。
-3. 按 A 档人工清单核对，输出轻量报告 `security-reports/self-review-<日期>.md`（不要写进仓库根目录）。
-4. 发现疑似可利用问题**只报告不深挖**，建议触发完整十阶段审核定性。
+1. **Authorization check.** Confirm that the target is user-owned and non-production and
+   that the user has authorized attack testing. Terminate on production indicators.
+2. **Environment preparation.** Start the application in an isolated environment, create
+   two test accounts (A and B) for object-level authorization tests, and capture baseline
+   responses. Before testing, ask the user to commit or tag the current work so that
+   canaries and temporary changes can be reviewed with `git diff` and reverted.
+3. **Hypotheses.** Combine the suspected issues from Stages 3–6 with the standard
+   techniques in the attack manual. Assign each hypothesis an `ATK-xx` identifier.
+4. **Execution.** Validate authentication bypass, IDOR, injection with non-destructive
+   payloads and canaries, SSRF with a local listener, rate limiting, race conditions, mass
+   assignment, open redirects, CORS, and other applicable techniques. Record the complete
+   request and response for every attempt.
+5. **Cleanup.** Delete canary data and test accounts, restore any role or permission
+   changes made during mass-assignment tests, stop listeners, and remove cookie jars and
+   temporary files.
+6. **Conclusions.** Classify each hypothesis as **Confirmed** (with dynamic evidence),
+   **Excluded** (not reproduced), or **Not verifiable** (with the reason).
 
-## 报告格式
+**Exit criterion:** every hypothesis has one of the three conclusions, and the cleanup
+checklist is complete.
 
-最终报告写成 Markdown 文件，默认放到 `security-reports/<项目名>-<日期>.md`，或用户指定位置。**写入前先确认目标目录可写、该目录不会把报告提交进版本库**；如果用户要求放在被审核项目内，先提示 `.gitignore` 并征得同意。
+### Stage 8 — Risk assessment and scoring
+
+Use `references/risk-standards.md`.
+
+1. Assign P0–P3 to static, dynamic, and intelligence findings. Mark dynamically confirmed
+   findings `[VERIFIED]`; their severity MUST NOT be downgraded. For a static suspicion
+   that was not reproduced, mark it `NOT REPRODUCED` and downgrade by at most half a
+   level, only if the attack actually covered the relevant path.
+2. Score five dimensions: attack-surface control, authentication and access control, data
+   protection, dependency and supply-chain health, and operations and incident response.
+   Produce a weighted total from 0 to 100. Every deduction MUST cite the finding IDs it
+   corresponds to.
+3. Apply the conclusion precedence in `risk-standards.md` Section 4: check the
+   "not releasable" hard red lines first, then "releasable after remediation", and only
+   then allow "releasable".
+
+**Exit criterion:** every finding has a severity, every score deduction is traceable, and
+the conclusion follows the mandated precedence.
+
+### Stage 9 — Structure and performance review
+
+1. Use `references/structure-optimization.md` to assess structure and list concrete
+   optimization items.
+2. Use `references/performance.md` to list performance issues and recommendations. These
+   are advisory, not vulnerabilities; do not mix them into the P0–P3 finding table.
+
+**Exit criterion:** structure and performance are reported in separate sections with
+evidence and effort estimates.
+
+### Stage 10 — High-risk review pass
+
+For high-risk modules, apply the relevant prompts in `references/audit-prompts.md`
+(12 categories, including cryptography, race conditions, and LLM/agent risks). Answer
+each prompt against the actual code context. Do not skip a prompt without recording
+`not applicable` or `manual review required`.
+
+**Exit criterion:** every selected prompt has an answer, and unresolved items are listed
+for manual review.
+
+## 5. Quick mode: pre-release self-review
+
+When the user asks for a self-review, self-check, security check, or pre-release check
+without requesting a full audit, do not run the full ten-stage workflow. Use the A-track
+in `references/self-review.md`.
+
+1. Prefer `python scripts/self_check.py <project> --strict` (cross-platform; returns
+   non-zero on FAIL). If Python is unavailable, run
+   `bash scripts/self_check.sh <project> --strict`. The check covers secret candidates,
+   dependency audit, Git hygiene, debug switches, and unsafe deployment defaults.
+2. Run `git diff` against the previous release tag and select changes touching
+   authentication, login, permissions, upload, payment, or configuration. Apply the
+   four questions to each changed file.
+3. Complete the A-track manual checklist and write a lightweight report to
+   `security-reports/self-review-<date>.md`. Do not write it to the repository root.
+4. **Report, do not exploit.** If a suspected exploitable issue is found, stop and
+   recommend a full ten-stage audit. The quick mode's job is early detection, not
+   exploitation.
+
+## 6. Report contract
+
+The report MUST be Markdown and MUST contain the following sections. Use the exact
+heading order unless the user requests a different structure.
 
 ```markdown
-# 安全审核报告：<项目名>
-- 审核时间 / 审核范围（目录）/ 技术栈 / 审核版本（SKILL 版本）/ 是否含动态攻击测试及授权说明
-- 总评分：__ / 100（分数等级：A/B/C/D）
-- 总体结论：可上线 / 修复后上线 / 不可上线
+# Security Audit Report: <project>
 
-## 一、项目概况（结构、暴露面、关键文件）
-## 二、审核范围与限制（时间/文件数预算、抽样规则、未覆盖项及原因）
-## 三、近期漏洞情报汇总（搜索日期与来源、组件核对表、评级映射结果）
-## 四、漏洞与风险发现（按 P0→P3 排列，已验证项标注 [已验证]）
-   每条：[P级] 标题 | 位置(文件:行) 或 接口+请求 | 问题描述 | 利用场景/攻击记录 | 修复建议
-## 五、AI 自攻击测试记录
-   - 测试环境与授权范围
-   - 确认的攻击（技术、接口、请求/响应证据、实际影响；证据已脱敏）
-   - 已排除的静态疑点（未复现项）
-   - 未执行项及原因（超红线 / 环境不可用 / 未授权）
-## 六、评分明细（五维度得分、扣分项与对应发现编号）
-## 七、已检查无异常项（证明覆盖面）
-## 八、项目结构评估与优化条例
-## 九、性能优化分析
-## 十、修复优先级路线图（先修什么、后修什么、预计工作量）+ 后续自审查建议（A/B/C 档节奏）
-## 附录 A：接口清单（方法 + 路径 + 处理函数位置 + 鉴权中间件 + 是否公开）
-## 附录 B：证据脱敏说明（哪些字段被打码、原始证据存放位置与访问控制）
+- Audit date / Scope (directories) / Stack / Skill version / Dynamic testing: yes|no and authorization note
+- Total score: __ / 100 (score band: A/B/C/D)
+- Overall conclusion: releasable | releasable after remediation | not releasable
+
+## 1. Project overview
+## 2. Scope and limitations
+## 3. Recent vulnerability intelligence
+## 4. Findings and risks (P0 -> P3; [VERIFIED] where applicable)
+## 5. Dynamic attack-test record
+## 6. Score breakdown
+## 7. Checked with no findings
+## 8. Structure assessment and optimization items
+## 9. Performance analysis
+## 10. Remediation roadmap and follow-up review cadence
+## Appendix A. Interface inventory
+## Appendix B. Evidence-redaction record
 ```
 
-**落盘前脱敏检查**：密钥只留前后各 4 位；`Authorization`、`Cookie`、`Set-Cookie`、password/token 字段全部打码；手机号/邮箱/身份证/银行卡掩码；内网地址按需保留网段、隐去主机名。原始未脱敏证据只留在受控本地目录，不随报告提交。
+Each finding MUST use this structure:
 
-## 严重度定义
+```text
+[P1] <title>
+Location: <file:line> or <method> <path>
+Issue: <what is wrong and why>
+Exploitation: <preconditions, steps, and impact>
+Evidence: <code excerpt or request/response; redacted>
+Remediation: <specific code or configuration change and regression test>
+```
 
-以 [references/risk-standards.md](references/risk-standards.md) 为准；下表只作速查。
+**Pre-write redaction check:** secrets show at most four leading and four trailing
+characters; `Authorization`, `Cookie`, `Set-Cookie`, password, and token values are
+`[REDACTED]`; PII is masked; internal hostnames are removed while preserving the subnet
+when useful. Raw evidence stays in the controlled local directory and MUST NOT be
+attached to the report or committed to Git.
 
-| 级别 | 定义 | 示例 |
+## 7. Severity definitions
+
+The authoritative definitions are in `references/risk-standards.md`. The table below is a
+quick reference only.
+
+| Severity | Definition | Example |
 |---|---|---|
-| P0 严重 | 无需特殊条件即可利用，直接导致数据泄露、权限绕过或系统接管 | 硬编码生产密钥、SQL 注入（已验证）、未鉴权的管理接口 |
-| P1 高 | 有前置条件但可稳定利用，或泄露影响大 | 水平越权、敏感信息入日志、关闭证书校验 |
-| P2 中 | 需特定条件利用或影响有限 | 缺少安全响应头、限流缺失、目录可列表 |
-| P3 低 | 加固建议 | 依赖版本偏旧、注释中的内部信息 |
+| P0 Critical | Exploitable without special conditions; leads directly to data disclosure, authorization bypass, or system compromise | Hard-coded production key, verified SQL injection, unauthenticated admin API |
+| P1 High | Exploitable with preconditions, or has high-impact disclosure | Horizontal privilege escalation, secrets in logs, disabled certificate validation |
+| P2 Medium | Requires specific conditions or has limited impact | Missing security headers, no rate limiting, directory listing |
+| P3 Low | Hardening recommendation | Outdated dependency, internal information in comments |
 
-## 版本与回归
+## 8. Version and regression
 
-- 当前版本 **alpha1.1**；变更见 [CHANGELOG.md](CHANGELOG.md)，版本号见 [VERSION](VERSION)。
-- 修改脚本或规则后，运行 `python -m unittest discover -s tests -v`；CI 会在 Ubuntu/Windows 的 Python 3.9/3.12 上跑同一套测试。
-- 新增/修改检测规则时，同时更新 Python 与 bash 两个实现，或在 `CHANGELOG.md` 注明只支持其中一个。
+- Current version: **alpha1.2**; see `CHANGELOG.md` and `VERSION`.
+- After changing a rule or script, run `python -m unittest discover -s tests -v`. CI runs
+  the same suite on Ubuntu and Windows with Python 3.9 and 3.12.
+- When adding or changing a detection rule, update both the Python and bash
+  implementations, or record the intentional divergence in `CHANGELOG.md`.
+- The Chinese human manual is in `.chinese/`. It is documentation, not execution context.
 
-## 参考文件索引
+## 9. Reference index
 
-| 文件 | 何时读 |
+| File | When to read |
 |---|---|
-| [references/server-vulns.md](references/server-vulns.md) | 阶段 3 开始前必读 |
-| [references/api-audit.md](references/api-audit.md) | 阶段 4 开始前必读 |
-| [references/secrets-hijack.md](references/secrets-hijack.md) | 阶段 2 开始前必读 |
-| [references/advanced-risks.md](references/advanced-risks.md) | 阶段 5 开始前必读 |
-| [references/vuln-intel.md](references/vuln-intel.md) | 阶段 6 开始前必读 |
-| [references/attack-testing.md](references/attack-testing.md) | 阶段 7 开始前必读（授权门+红线） |
-| [references/risk-standards.md](references/risk-standards.md) | 阶段 8 开始前必读 |
-| [references/structure-optimization.md](references/structure-optimization.md) | 阶段 9 开始前必读 |
-| [references/performance.md](references/performance.md) | 阶段 9 开始前必读 |
-| [references/audit-prompts.md](references/audit-prompts.md) | 阶段 10 / 高风险模块复核时读取 |
-| [references/self-review.md](references/self-review.md) | 快速模式（自审查）时必读 |
-| [scripts/scan_secrets.py](scripts/scan_secrets.py) | 阶段 2 首选（跨平台） |
-| [scripts/self_check.py](scripts/self_check.py) | 快速模式首选（跨平台） |
-| [scripts/scan_secrets.sh](scripts/scan_secrets.sh) | 阶段 2 备选（bash） |
-| [scripts/self_check.sh](scripts/self_check.sh) | 快速模式备选（bash） |
-| [tests/test_smoke.py](tests/test_smoke.py) | 修改脚本后运行回归 |
+| `references/server-vulns.md` | Before Stage 3 |
+| `references/api-audit.md` | Before Stage 4 |
+| `references/secrets-hijack.md` | Before Stage 2 |
+| `references/advanced-risks.md` | Before Stage 5 |
+| `references/vuln-intel.md` | Before Stage 6 |
+| `references/attack-testing.md` | Before Stage 7 (authorization gate and red lines) |
+| `references/risk-standards.md` | Before Stage 8 |
+| `references/structure-optimization.md` | Before Stage 9 |
+| `references/performance.md` | Before Stage 9 |
+| `references/audit-prompts.md` | Stage 10 and high-risk review |
+| `references/self-review.md` | Quick mode |
+| `scripts/scan_secrets.py` | Stage 2 preferred implementation |
+| `scripts/self_check.py` | Quick mode preferred implementation |
+| `scripts/scan_secrets.sh` | Stage 2 bash fallback |
+| `scripts/self_check.sh` | Quick mode bash fallback |
+| `tests/test_smoke.py` | Regression tests after script changes |

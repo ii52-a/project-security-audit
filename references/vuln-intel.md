@@ -1,66 +1,95 @@
-# 近期漏洞情报搜索流程
+# Recent Vulnerability Intelligence Workflow
 
-把"项目在用什么"与"世界最近爆了什么"对上号：检索项目技术栈与依赖的近期已知漏洞，核对版本后汇入报告，并可转化为攻击假设。**情报有时效性——报告必须注明搜索日期与来源。**
+Correlate what the project uses with what has recently been disclosed. Search for known
+vulnerabilities in the project's stack and dependencies, verify affected versions, and
+feed the results into the report and, when safe, into attack hypotheses. **Intelligence is
+time-sensitive: the report MUST record the search date and sources.**
 
-## 1. 输入：组件清单（来自阶段 1 测绘 + lock 文件）
+## 1. Input: component inventory (from Stage 1 and lock files)
 
-按暴露面分四类提取，每项带**精确版本**（读 lock 文件，不读 package.json/requirements.txt 的宽松声明）：
+Extract four categories. Every entry MUST carry an **exact version** from the lock file,
+not a loose range from `package.json` or `requirements.txt`:
 
-1. 运行时与框架：语言版本、Web 框架、模板引擎
-2. 基础设施组件：nginx、数据库、Redis、MQ、对象存储 SDK
-3. 关键三方库：认证（jwt/passport）、解析（yaml/xml/fastjson）、文件处理（图像/压缩）
-4. 容器与镜像：基础镜像（`FROM` 行）、编排组件版本
+1. Runtime and framework: language version, web framework, template engine.
+2. Infrastructure: nginx, database, Redis, MQ, object-storage SDK.
+3. Critical third-party libraries: authentication (JWT/passport), parsing
+   (YAML/XML/Fastjson), file processing (image/archive).
+4. Containers and images: base image (`FROM` line), orchestration component versions.
 
-组件数量多时（>30），优先前三类中直接处理不可信输入与网络边界的库。
+If the component count exceeds 30, prioritize libraries in the first three categories that
+directly process untrusted input or sit on a network boundary.
 
-## 2. 自动审计（有网先跑，输出最准）
+## 2. Automated audit (run first when network access is available)
 
 ```bash
-npm audit --omit=dev                 # Node（读 lock）
-pip-audit -r requirements.txt        # Python（pip-audit 未装则 pip install pip-audit）
+npm audit --omit=dev                 # Node (reads the lock file)
+pip-audit -r requirements.txt        # Python (install with: pip install pip-audit)
 govulncheck ./...                    # Go
 cargo audit                          # Rust
-trivy fs <目录>                       # 通用（含镜像，装了就用）
+trivy fs <directory>                 # General, including images, if installed
 composer audit                       # PHP
 ```
 
-工具不可用或无网 → 跳到第 3 节纯搜索。注意 `npm audit` 默认含 dev 依赖会放大噪音，务必 `--omit=dev`。
+If a tool is unavailable or there is no network access, continue with Section 3. Note that
+`npm audit` includes dev dependencies by default and inflates noise; always use
+`--omit=dev`.
 
-## 3. Web 搜索流程（WebSearch/WebFetch）
+## 3. Web search workflow
 
-对每个关键组件按序执行，先精确后泛化：
+For each critical component, search from precise to broad:
 
-1. `<组件名> <大版本> CVE <当前年份>`（英文优先，覆盖面广）
-2. `<组件名> security advisory`（命中 GitHub Security Advisories、厂商官方公告优先采信）
-3. 国内组件补搜 `<组件名> 漏洞 通报`（命中 CNVD/CNNVD/厂商中文公告）
-4. 框架级补搜 `<框架> vulnerability <当前年月>`（捕捉供应链事件与嵌入式组件）
+1. `<component> <major version> CVE <current year>` (prefer English for coverage).
+2. `<component> security advisory` (prefer GitHub Security Advisories and vendor
+   advisories).
+3. For Chinese components, also search `<component> 漏洞 通报` (CNVD/CNNVD and vendor
+   Chinese advisories).
+4. Framework-level search: `<framework> vulnerability <current year-month>` to catch
+   supply-chain incidents and embedded components.
 
-采信优先级：厂商官方公告 ≥ GitHub Advisory/NVD ≥ 安全厂商分析文章 ≥ 论坛转述。每条情报记下来源 URL 与发布日期；报告中的"搜索日期"以实际执行日为准，不要沿用示例日期。
+Source precedence: vendor advisory ≥ GitHub Advisory/NVD ≥ security-vendor analysis ≥
+forum repost. Record the source URL and publication date for every item. The report's
+"search date" MUST be the actual execution date, not an example date copied from this
+document.
 
-**在野利用加成**：命中 CISA KEV 目录或文章明示"已有 PoC/在野利用"的 CVE 单独标注 ⚡——评级直接上调（见第 5 节）。
+**In-the-wild bonus:** mark a CVE with `⚡` when it appears in the CISA KEV catalog or a
+source states that a PoC or in-the-wild exploitation exists. Raise its severity accordingly
+(see Section 5).
 
-## 4. 核对影响（防止"有 CVE 就报"）
+## 4. Impact verification (prevent "report every CVE")
 
-对每条检索到的漏洞，回答三个问题，写不出来的丢弃：
+For every candidate, answer three questions. If you cannot answer them, discard the item:
 
-1. **影响版本区间**是什么（advisory 原文里的 `>=x <y`）？
-2. **本项目实际版本**落在区间内吗（逐条对 lock 文件版本，区间拿不准标"需复核"）？
-3. **漏洞触发条件**本项目满足吗（如：漏洞在 XML 解析模块，项目根本不用它解析外部输入 → 降级为"理论受影响"）？
+1. What is the **affected version range** (`>=x <y` in the advisory)?
+2. Does the **actual project version** fall inside that range? Check the lock file
+   version; mark `REVIEW REQUIRED` when the range is uncertain.
+3. Does the project satisfy the **triggering condition**? For example, if the vulnerable
+   code is an XML parser the project never uses for untrusted input, downgrade it to
+   "theoretically affected".
 
-## 5. 汇总表（写入报告"近期漏洞情报汇总"节）
+## 5. Summary table (report section "Recent vulnerability intelligence")
 
-```
-| CVE/编号 | 组件 | 影响区间 | 本项目版本 | 是否受影响 | CVSS/严重度 | 在野利用 | 官方修复版本 | 行动建议 |
+```text
+| CVE/ID | Component | Affected range | Project version | Affected | CVSS/severity | In the wild | Fixed version | Action |
 |---|---|---|---|---|---|---|---|---|
-| CVE-<年份>-XXXXX | fastjson 1.2.x | < 1.2.83 | 1.2.76 | 是 | 9.8 | ⚡ 有 PoC | 1.2.83 | 立即升级，升级前下线反序列化入口 |
+| CVE-<year>-XXXXX | fastjson 1.2.x | < 1.2.83 | 1.2.76 | yes | 9.8 | ⚡ PoC exists | 1.2.83 | Upgrade immediately; disable the deserialization entry point before upgrading |
 ```
 
-评级映射（汇入主发现表时）：受影响 + 在野利用 ⚡ → P0；受影响 + CVSS ≥ 9 → P0；受影响 → P1；理论受影响（触发条件不满足）→ P3 备案；需复核 → 列入"需人工复核"，不进主表。
+Severity mapping when merging into the main findings table: affected + in-the-wild `⚡` →
+P0; affected + CVSS ≥ 9 → P0; affected → P1; theoretically affected (trigger not met) →
+P3, recorded for awareness; review required → "manual review required", not in the main
+table.
 
-## 6. 与攻击测试联动
+## 6. Link to attack testing
 
-第 5 节中"受影响且公开 PoC 存在"的注入/反序列化/RCE 类漏洞：若阶段 7 自攻击测试在运行（授权门已过），把该漏洞的 PoC payload（**非破坏版**，遵循红线）追加为攻击假设 ATK-xx 实测验证；不可安全改造的 PoC（含真实下载、持久化）只做静态确认，标注"未实测"。
+For an affected injection, deserialization, or RCE issue with a public PoC in Section 5:
+if Stage 7 dynamic testing is running (authorization gate passed), add a
+**non-destructive** version of the PoC as attack hypothesis `ATK-xx` and validate it within
+the red lines. If a safe variant cannot be constructed (the PoC downloads payloads or
+establishes persistence), perform static confirmation only and mark it `NOT TESTED`.
 
-## 7. 无网/离线降级
+## 7. Offline degradation
 
-无法联网时：标注"本次审核未做在线情报核查，漏洞覆盖止于审核者知识截止日期"，并基于既有知识列出高风险组件的已知 CVE 候选（明确标注"凭记忆，版本区间需人工核对"），不虚构编号。
+Without network access, state: "This audit did not perform online intelligence checks;
+vulnerability coverage ends at the auditor's knowledge cutoff." List known CVE candidates
+for high-risk components from existing knowledge, explicitly marked
+"from memory; version ranges require manual verification". Do not invent CVE IDs.

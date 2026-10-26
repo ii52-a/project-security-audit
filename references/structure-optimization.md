@@ -1,51 +1,75 @@
-# 项目结构评估标准与优化条例
+# Project Structure Assessment and Optimization Standard
 
-## 1. 结构评估标准（逐项判定：达标 / 部分达标 / 不达标）
+## 1. Structure assessment (grade each item: Meets / Partially meets / Does not meet)
 
-### 1.1 目录组织
+### 1.1 Directory organization
 
-- 分层清晰：入口、路由/控制器、业务逻辑、数据访问、公共工具是否有可辨识的边界；业务逻辑是否泄漏进路由处理函数（千行 controller 是反例）。
-- 按功能还是按类型组织均可，但必须**一致**——不允许一半按类型一半按功能混排且无说明。
-- 公共代码是否合理抽取（无大面积复制粘贴的重复逻辑，>50 行的重复块记为不达标）。
-- 死代码：未被引用的模块、注释掉的整段逻辑、多套并存的历史实现（`utils_v2`、`old_` 前缀目录）。
+- Clear layering: entry points, routes/controllers, business logic, data access, and shared
+  utilities have identifiable boundaries. Business logic MUST NOT leak into route handlers
+  (a thousand-line controller is a counterexample).
+- Organizing by feature or by type is acceptable, but the choice MUST be **consistent**.
+  Mixing both without explanation does not meet the standard.
+- Shared code is reasonably extracted. Large copy-paste duplication (a repeated block over
+  50 lines) does not meet the standard.
+- Dead code: unreferenced modules, commented-out logic, and multiple historical
+  implementations (`utils_v2`, `old_` directories).
 
-### 1.2 配置与环境
+### 1.2 Configuration and environment
 
-- 配置与代码分离：无环境差异硬编码（数据库地址、开关写死在代码里）。
-- 环境隔离：dev/test/prod 配置来源明确；有 `.env.example`；类型化的配置加载（schema 校验，启动时 fail-fast）。
-- 敏感配置不进仓库（与安全审核阶段 2 结论交叉引用）。
+- Configuration is separated from code: no environment-specific values hard-coded
+  (database addresses or switches embedded in code).
+- Environment isolation: dev/test/prod configuration sources are explicit; `.env.example`
+  exists; configuration loading is typed and validated (schema validation with fail-fast at
+  startup).
+- Sensitive configuration is not committed. Cross-reference the Stage 2 security findings.
 
-### 1.3 工程规范
+### 1.3 Engineering practice
 
-- 有 README：含启动方式、环境要求、目录说明。
-- 依赖清单完整（import 了但未声明的包 = 不达标）；有 lock 文件且提交。
-- 有基础质量设施：lint 配置、格式化配置、至少冒烟级测试；测试能否覆盖核心路径。
-- 构建与启动可一键完成（脚本/Makefile/npm scripts），无需口口相传的步骤。
-- 版本管理：提交历史可读（不强求）；二进制/大文件是否该走 LFS 或制品库而非仓库。
+- A README exists and covers startup, environment requirements, and directory layout.
+- The dependency manifest is complete (a package imported but not declared does not meet
+  the standard), and a lock file exists and is committed.
+- Basic quality infrastructure exists: lint configuration, formatting configuration, and at
+  least smoke tests. Tests SHOULD cover core paths.
+- Build and startup are one-command operations (script, Makefile, or npm scripts) with no
+  undocumented tribal steps.
+- Version control: commit history is readable (not mandatory); binary and large files
+  SHOULD use LFS or an artifact repository rather than the repository itself.
 
-## 2. 优化条例（按优先级输出，每条 = 现状问题 + 具体改法）
+## 2. Optimization items (output in priority order; each item = current problem + concrete change)
 
-### 2.1 代码质量条例
+### 2.1 Code-quality items
 
-1. 单文件超 500 行、单函数超 80 行的列出清单并建议拆分方向（按职责，不按行数机械切）。
-2. 巨型依赖替换：为一个小功能引入大依赖（如为 uuid 引入 lodash）建议移除。
-3. 错误处理统一：混用 throw/返回码/吞异常（空 catch）的，统一错误模型；空 catch 逐个列位置。
-4. 日志规范：统一日志库与级别；禁止 console.log 留存于生产路径。
+1. List files over 500 lines and functions over 80 lines, and recommend a decomposition by
+   responsibility, not by line count alone.
+2. Oversized dependencies: remove a large dependency introduced for a small function (for
+   example, pulling in lodash for a UUID).
+3. Standardize error handling. When throw, return codes, and swallowed exceptions (empty
+   `catch`) are mixed, define one error model and list every empty `catch`.
+4. Standardize logging: one logging library and level scheme; no `console.log` on
+   production paths.
 
-### 2.2 可维护性条例
+### 2.2 Maintainability items
 
-5. API 层与数据层解耦：SQL/ORM 调用直接散在路由中的，抽数据访问层，顺便获得注入防护的统一位置。
-6. 类型安全：TS 项目关闭 `any` 泛滥（统计 `: any` 数量）；无类型的 JS 项目建议至少对公共接口加 JSDoc 或渐进迁移。
-7. 魔法值收敛：重复出现的 URL、超时、阈值抽成常量/配置。
+5. Decouple the API layer from the data layer. When SQL/ORM calls are scattered through
+   routes, extract a data-access layer; this also provides one place for injection
+   defenses.
+6. Type safety: in TypeScript projects, reduce `any` proliferation (count `: any`). In
+   untyped JavaScript projects, add JSDoc to public interfaces or migrate incrementally.
+7. Consolidate magic values: repeated URLs, timeouts, and thresholds become constants or
+   configuration.
 
-### 2.3 工程化条例
+### 2.3 Engineering items
 
-8. 补 CI：至少 lint + 测试 + 构建三步；无 CI 的项目这是第一条建议。
-9. 补 `.editorconfig`、lint、format 三件套，消除风格噪音。
-10. 文档补齐：接口文档（OpenAPI 注解或导出）、部署文档、环境变量说明。
+8. Add CI with at least lint, test, and build stages. For a project without CI, this is the
+   first recommendation.
+9. Add `.editorconfig`, lint, and formatting to eliminate style noise.
+10. Complete documentation: API documentation (OpenAPI annotations or export), deployment
+    documentation, and environment-variable reference.
 
-## 3. 输出要求
+## 3. Output requirements
 
-- 结构评估用一张表汇总各标准项的判定结果，随后只对"部分达标/不达标"项展开说明。
-- 优化条例按"收益大且改动小 → 收益大且改动大 → 锦上添花"排序，每条标注预计工作量（小时级/天级/周级）。
-- 本节与性能分析（performance.md）分开成章，不要混在一起。
+- Summarize the assessment in one table with the grade for each standard, then expand only
+  on "Partially meets" and "Does not meet" items.
+- Order optimization items by "high benefit, low effort → high benefit, high effort →
+  nice-to-have". Estimate effort for each (hours / days / weeks).
+- Keep this section separate from performance analysis (`performance.md`); do not mix them.

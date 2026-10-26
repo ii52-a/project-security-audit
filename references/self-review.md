@@ -1,50 +1,61 @@
-# 项目自审查流程
+# Project Self-Review Workflow
 
-完整审核（十阶段）成本高，不适合天天跑。本流程定义项目方日常可持续执行的自审查节奏，也作为 skill 的**快速模式**：用户说"自审查/自查/安全自检"时，agent 按 A 档执行并输出轻量报告，不启动完整十阶段流程。
+A full audit (ten stages) is expensive and not suitable for daily execution. This document
+defines a sustainable self-review cadence and serves as the skill's **quick mode**: when
+the user asks for a self-review, self-check, or pre-release check, the agent runs the
+A-track and produces a lightweight report without starting the full ten-stage workflow.
 
-## A 档：发布前快速自检（目标 ≤15 分钟，不含依赖审计网络等待）
+## A-track: pre-release quick check (target ≤15 minutes, excluding dependency-audit network time)
 
-每次发版前由开发或 agent 执行：
+Run before every release, by a developer or an agent:
 
 ```bash
-# 1. 一键自检脚本（密钥扫描 + 依赖审计 + git 卫生 + 调试开关 + 危险部署默认值）
-# 首选 Python（Windows/Linux/macOS 通用）；--strict 时存在 FAIL 返回非零，可用于 CI
-python <skill目录>/scripts/self_check.py <项目目录> --strict
+# 1. One-command self-check (secrets + dependency audit + Git hygiene + debug switches + unsafe deployment defaults).
+# Prefer Python (Windows/Linux/macOS). --strict returns non-zero when a FAIL exists, suitable for CI.
+python <skill-dir>/scripts/self_check.py <project-dir> --strict
 
-# 没有 Python 时用 bash 版（Linux/macOS 或 Git Bash；Windows 系统自带 bash.exe 可能是 WSL 启动器）
-bash <skill目录>/scripts/self_check.sh <项目目录> --strict
+# If Python is unavailable, use the bash version (Linux/macOS or Git Bash; the Windows built-in bash.exe may be a WSL launcher).
+bash <skill-dir>/scripts/self_check.sh <project-dir> --strict
 
-# 2. 高风险变更复查：自上次审核以来的改动里筛"摸安全边界的"
-git diff --stat v<上次发版tag>..HEAD -- '*auth*' '*login*' '*permission*' '*upload*' '*pay*' '*config*'
-# 3. 新增接口过"四问"
-git diff v<上次发版tag>..HEAD -- '*route*' '*controller*' '*api*'
+# 2. High-risk change review: select changes since the last review that touch security boundaries.
+git diff --stat v<last-release-tag>..HEAD -- '*auth*' '*login*' '*permission*' '*upload*' '*pay*' '*config*'
+# 3. Apply the four questions to new or changed interfaces.
+git diff v<last-release-tag>..HEAD -- '*route*' '*controller*' '*api*'
 ```
 
-对筛出的每个改动文件回答：**新增/修改的接口挂鉴权了吗？外部输入进危险 sink 了吗？改了配置默认值吗？动过密钥/凭据吗？** 任一答不好 → 触发完整审核。
+For every changed file selected above, answer: **Does the new or modified interface enforce
+authentication? Does external input reach a dangerous sink? Was a configuration default
+changed? Were keys or credentials touched?** If any answer is unsatisfactory, trigger a
+full audit.
 
-### A 档检查清单（脚本之外的人工项）
+### A-track checklist (manual items beyond the script)
 
-| # | 检查项 | 判定 |
+| # | Check | Pass criterion |
 |---|---|---|
-| A1 | `self_check` 无 FAIL 命中 | 有 FAIL 即中止发版，先处置；WARN 逐条人工判定 |
-| A2 | 新增依赖过 CVE 查询（按 vuln-intel.md 第 3 节查一遍） | 无未处置高危 |
-| A3 | 环境变量有新增吗？`.env.example` 同步了吗？ | 一致 |
-| A4 | 数据库变更脚本里有没有删列/改权限？ | 有则单独评审 |
-| A5 | 日志新增语句没有打印敏感字段 | 逐条目检 diff |
+| A1 | `self_check` reports no FAIL | Any FAIL blocks release until resolved; review every WARN manually |
+| A2 | New dependencies checked against CVEs (use `vuln-intel.md` Section 3) | No unresolved high-severity issue |
+| A3 | New environment variables documented and `.env.example` synchronized | Consistent |
+| A4 | Database change scripts do not drop columns or alter permissions | Any such change requires separate review |
+| A5 | New log statements do not print sensitive fields | Inspect the diff line by line |
 
-输出：轻量报告（`security-reports/self-review-<日期>.md`，不要写进仓库根目录）——五项判定结果 + 风险变更清单 + 是否放行结论。
+Output: a lightweight report at `security-reports/self-review-<date>.md` (not the
+repository root) containing the five checklist results, the risky-change list, and a
+release/no-release conclusion.
 
-## B 档：迭代内安全卡点（每个开发迭代）
+## B-track: in-iteration security gates (each development iteration)
 
-- 新增第三方包：安装前查维护活跃度与已知 CVE，`postinstall` 脚本过目。
-- 新增接口：按 [api-audit.md](api-audit.md) 第 2–6 节四问自查（谁能调/输入校验/输出脱敏/限流）。
-- 提交前密钥拦截：见下方 pre-commit 集成。
-- 涉及资金/库存/权限的改动：reviewer 强制一人，重点看竞态（"先查后写"是否原子）。
+- New third-party package: check maintenance activity and known CVEs before installation;
+  review `postinstall` scripts.
+- New interface: apply the four questions from `api-audit.md` Sections 2–6 (who can call it,
+  input validation, output redaction, rate limiting).
+- Pre-commit secret blocking: see the pre-commit integration below.
+- Changes affecting money, inventory, or permissions: require one reviewer, with emphasis
+  on race conditions (whether "read then write" is atomic).
 
-### pre-commit 集成（一次配置，永久生效）
+### Pre-commit integration (configure once, effective thereafter)
 
 ```yaml
-# .pre-commit-config.yaml 示例
+# .pre-commit-config.yaml example
 repos:
   - repo: https://github.com/gitleaks/gitleaks
     rev: v8.21.2
@@ -58,20 +69,34 @@ repos:
         language: system
 ```
 
-Windows 使用 pre-commit 时需要 Git Bash/WSL 提供 `bash`；没有 bash 时改用 Python 钩子或 CI 端的 gitleaks。
+On Windows, pre-commit requires Git Bash or WSL to provide `bash`. Without bash, use a
+Python hook or run gitleaks in CI.
 
-## C 档：月度深度复查（≤2 小时）
+## C-track: monthly deep review (≤2 hours)
 
-1. 重跑完整 skill 审核的阶段 2（密钥，含 git 历史增量）、3（服务器）、5（进阶）——不必每次全十阶段。
-2. 密钥年龄检查：所有生产凭据轮换周期 ≤90 天，超期列清单。
-3. 权限最小化复查：云 IAM、数据库账号、服务器用户有无"临时开大忘了收"的。
-4. 复查上次完整审核报告：P0/P1 是否清零、P2 有无滚动修复。
-5. 漏洞情报增量：按 [vuln-intel.md](vuln-intel.md) 对核心组件重搜近 30 天新 CVE。
+1. Re-run Stage 2 (secrets, including Git-history delta), Stage 3 (server), and Stage 5
+   (advanced) of the full skill. A full ten-stage run is not required every month.
+2. Key-age check: every production credential MUST be rotated within 90 days; list expired
+   credentials.
+3. Least-privilege review: cloud IAM, database accounts, and server users that were
+   temporarily elevated and never reduced.
+4. Review the previous full audit report: are P0/P1 clear, and are P2 items being fixed
+   incrementally?
+5. Intelligence delta: use `vuln-intel.md` to re-search CVEs from the last 30 days for
+   critical components.
 
-## 自查发现异常时的升级路径
+## Escalation when self-review finds an anomaly
 
-A/B 档自查**只发现问题，不深挖利用**：发现疑似可利用漏洞（注入、越权、密钥泄露）→ 停止自查，报告并建议触发完整十阶段审核（含自攻击验证）来确认影响面。自查的职责是"早发现"，"定性"交给完整审核。
+A/B-track self-review **finds issues; it does not exploit them**. If a suspected
+exploitable vulnerability is found (injection, authorization bypass, secret disclosure),
+stop the self-review, report it, and recommend a full ten-stage audit (including
+authorized attack validation) to determine impact. Self-review is for early detection;
+full audit is for confirmation.
 
-## agent 快速模式执行顺序
+## Agent execution order for quick mode
 
-用户要求"自审查/自查"时：读本文件 → 优先跑 `self_check.py --strict`（无 Python 时用 bash 版）、git diff 筛查、A 档清单 → 简要核对 vuln-intel 第 3 节（仅新增依赖）→ 输出轻量报告到 `security-reports/`。全程不做攻击测试、不建监听器；发现 P0 级疑似项时明确建议"触发完整安全审核"。
+When the user asks for a self-review: read this file → run `self_check.py --strict`
+(falling back to bash), run the Git-diff selection, complete the A-track checklist → briefly
+check `vuln-intel.md` Section 3 for new dependencies only → write the lightweight report to
+`security-reports/`. Do not perform attack testing or start listeners. If a suspected P0 is
+found, explicitly recommend a full security audit.
