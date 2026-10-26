@@ -1,12 +1,26 @@
 #!/usr/bin/env bash
 # self_check.sh — 项目自审查快速自检（发布前 ≤15 分钟档）
-# 用法: bash self_check.sh [项目目录]   （默认当前目录）
+# 用法: bash self_check.sh [项目目录] [--strict]
+#   --strict  存在 FAIL 时返回 1（可用于 CI）
 # 检查: 密钥硬编码 + 依赖漏洞审计 + git 卫生 + 调试开关 + 危险默认配置
 # 输出: 逐项 PASS/WARN/FAIL 汇总。脚本只报告不修改项目文件。结果需人工确认，存在误报漏报。
+# 说明: 推荐优先使用跨平台的 self_check.py；本脚本适用于 Linux/macOS/Git Bash。
 
 set -u
-TARGET="${1:-.}"
-TARGET="${TARGET%/}"
+
+TARGET="."
+STRICT=0
+for arg in "$@"; do
+  case "$arg" in
+    --strict) STRICT=1 ;;
+    -h|--help)
+      sed -n '2,8p' "$0"
+      exit 0
+      ;;
+    *) TARGET="$arg" ;;
+  esac
+done
+[ "$TARGET" = "/" ] || TARGET="${TARGET%/}"
 [ -d "$TARGET" ] || { echo "错误: $TARGET 不是目录" >&2; exit 1; }
 SKILL_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 PASS=0; WARN=0; FAIL=0
@@ -21,12 +35,28 @@ echo "== self_check: $TARGET  ($(date '+%F %T')) =="
 
 # ── 1. 密钥与硬编码扫描（复用 scan_secrets.sh）──────────────────
 echo "-- [1/5] 密钥扫描 --"
-secret_hits=$(bash "$SKILL_DIR/scripts/scan_secrets.sh" "$TARGET" | grep -c '| \[' || true)
-if [ "$secret_hits" -gt 0 ]; then
-  say FAIL "密钥扫描命中 $secret_hits 处候选（逐条人工确认后定级）"
-  bash "$SKILL_DIR/scripts/scan_secrets.sh" "$TARGET" | grep '| \[' | head -20
+secret_out=$(bash "$SKILL_DIR/scripts/scan_secrets.sh" "$TARGET" 2>&1)
+secret_status=$?
+if [ "$secret_status" -ne 0 ]; then
+  say FAIL "密钥扫描执行失败（退出码 $secret_status；检查 bash/scan_secrets.sh）"
+  printf '%s\n' "$secret_out" | tail -5
 else
-  say PASS "密钥扫描无正则命中（仍需人工补查日志/前端产物）"
+  secret_hits=$(printf '%s\n' "$secret_out" | grep -c '| \[' || true)
+  if [ "$secret_hits" -gt 0 ]; then
+    say FAIL "密钥扫描命中 $secret_hits 处候选（逐条人工确认后定级）"
+    printf '%s\n' "$secret_out" | grep '| \[' | head -20
+  else
+    say PASS "密钥扫描无正则命中（仍需人工补查日志/前端产物）"
+  fi
+  sensitive=$(printf '%s\n' "$secret_out" | awk '
+    /^== 疑似敏感文件 ==$/ { in_section=1; next }
+    /^== 汇总:/ { in_section=0 }
+    in_section && NF { print }
+  ' | head -10)
+  if [ -n "$sensitive" ]; then
+    say WARN "发现疑似敏感文件（确认是否被忽略/是否含真值）:"
+    printf '%s\n' "$sensitive"
+  fi
 fi
 
 # ── 2. 依赖漏洞审计 ────────────────────────────────────────────
@@ -68,25 +98,49 @@ fi
 
 # ── 4. 调试开关与危险默认值 ─────────────────────────────────────
 echo "-- [4/5] 调试开关 --"
-debug_hits=$(grep -rnEi --include='*.py' --include='*.js' --include='*.ts' --include='*.java' \
-  --include='*.php' --include='*.go' \
-  '(debug[[:space:]]*=[[:space:]]*true|app\.run\([^)]*debug[[:space:]]*=[[:space:]]*true|DEBUG[[:space:]]*=[[:space:]]*true)' \
+debug_hits=$(grep -rnEIi \
+  --include='*.py' --include='*.js' --include='*.ts' --include='*.tsx' --include='*.jsx' \
+  --include='*.mjs' --include='*.cjs' --include='*.java' --include='*.php' --include='*.go' \
+  --include='*.rb' --include='*.cs' --include='*.vue' --include='*.svelte' \
+  --include='*.yaml' --include='*.yml' --include='*.toml' --include='*.ini' \
+  --include='*.conf' --include='*.properties' --include='.env*' \
+  '(debug[[:space:]]*[:=][[:space:]]*true|app\.run\([^)]*debug[[:space:]]*=[[:space:]]*true)' \
   "$TARGET" 2>/dev/null | grep -vE 'node_modules|\.git/|dist/|build/' | head -10 || true)
-if [ -n "$debug_hits" ]; then say FAIL "源码中发现 debug=true（若属生产配置即中招），位置:"; printf '%s\n' "$debug_hits"
-else say PASS "未见 debug=true"; fi
+if [ -n "$debug_hits" ]; then
+  if printf '%s\n' "$debug_hits" | grep -Eq '(^|/)(tests?|spec|__tests__|fixtures?)/'; then
+    say WARN "发现 debug 开关（含测试/fixture 路径，逐条确认是否生产配置），位置:"
+  else
+    say FAIL "源码/配置中发现 debug 开关（若属生产配置即中招），位置:"
+  fi
+  printf '%s\n' "$debug_hits"
+else say PASS "未见 debug=true / debug: true"; fi
 
 # ── 5. 危险部署默认值 ──────────────────────────────────────────
 echo "-- [5/5] 部署默认值 --"
-if [ -f "$TARGET/docker-compose.yml" ] || [ -f "$TARGET/docker-compose.yaml" ] || [ -f "$TARGET/compose.yaml" ]; then
-  if grep -nE '(MYSQL|POSTGRES|MONGO|REDIS)_(ROOT_)?PASSWORD[^:]*:\s*("|'"'"')?(root|123456|password|admin|postgres)("|'"'"')?\s*$' "$TARGET"/docker-compose*.y*ml "$TARGET"/compose*.y*ml 2>/dev/null | grep -v node_modules; then
+compose_files=()
+for f in "$TARGET"/docker-compose*.yml "$TARGET"/docker-compose*.yaml "$TARGET"/compose*.yml "$TARGET"/compose*.yaml; do
+  [ -f "$f" ] && compose_files+=("$f")
+done
+if [ "${#compose_files[@]}" -gt 0 ]; then
+  if grep -nE '(MYSQL|POSTGRES|MONGO|REDIS)_(ROOT_)?PASSWORD[[:space:]]*:[[:space:]]*["'"'"']?(root|123456|password|admin|postgres)["'"'"']?[[:space:]]*$' "${compose_files[@]}" 2>/dev/null; then
     say FAIL "docker-compose 使用常见弱默认密码（上方行）"
   else say PASS "docker-compose 未见常见弱默认密码"; fi
 else say PASS "无 docker-compose 文件"; fi
-nginx_conf=$(find "$TARGET" -maxdepth 3 -name '*.conf' -path '*nginx*' 2>/dev/null)
-if [ -n "$nginx_conf" ] && grep -n 'autoindex on' $nginx_conf >/dev/null 2>&1; then
-  say WARN "nginx 开启 autoindex（目录可列表）: $nginx_conf"
+
+nginx_hits=""
+while IFS= read -r conf; do
+  [ -z "$conf" ] && continue
+  hits=$(grep -n 'autoindex on' "$conf" 2>/dev/null || true)
+  [ -n "$hits" ] && nginx_hits="${nginx_hits}${conf}:${hits}"$'\n'
+done < <(find "$TARGET" -maxdepth 3 -name '*.conf' -path '*nginx*' -print 2>/dev/null)
+if [ -n "$nginx_hits" ]; then
+  say WARN "nginx 开启 autoindex（目录可列表）:"
+  printf '%s' "$nginx_hits"
 else say PASS "nginx autoindex 未开启或无 nginx 配置"; fi
 
 echo "== 汇总: PASS=$PASS WARN=$WARN FAIL=$FAIL =="
-echo "说明: FAIL=发版前必须处置; WARN=需人工判定; 密钥/竞态等深度问题请运行完整安全审核（九阶段）"
+echo "说明: FAIL=发版前必须处置; WARN=需人工判定; 密钥/竞态等深度问题请运行完整安全审核（十阶段）"
+if [ "$STRICT" -eq 1 ] && [ "$FAIL" -gt 0 ]; then
+  exit 1
+fi
 exit 0

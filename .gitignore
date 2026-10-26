@@ -3,7 +3,9 @@ security-audit-report.md
 security-reports/
 self-review-*.md
 
-# 本地临时文件
+# 本地环境/密钥
+.env
+.env.*
 *.local
 *.log
 *.tmp

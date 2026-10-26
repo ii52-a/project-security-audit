@@ -4,7 +4,7 @@
 
 ## 1. 接口枚举（先做）
 
-从以下位置提取完整接口清单，写入报告附录：
+从以下位置提取完整接口清单，写入报告**附录 A**（格式见 `SKILL.md` 报告模板）：
 
 - 路由定义（Express `app.get/post`、FastAPI `@router`、Spring `@RequestMapping`、Gin `r.GET` 等）
 - RPC/GraphQL schema、WebSocket 事件名、消息队列消费者

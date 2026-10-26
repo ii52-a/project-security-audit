@@ -2,11 +2,12 @@
 
 ## 1. 硬编码密钥扫描
 
-先运行 `bash scripts/scan_secrets.sh <目录>` 获得候选点，再人工逐条确认。脚本扫不到的模式要人工补查：
+先运行 `python scripts/scan_secrets.py <目录>`（跨平台；无 Python 时用 `bash scripts/scan_secrets.sh <目录>`）获得候选点，再人工逐条确认。脚本扫不到的模式要人工补查：
 
 - 日志语句中打印的密码/token（`console.log(password)`、`logger.info(token)`）
 - 前端打包产物/源码里的内网 IP、内部域名、接口密钥（搜索 `192.168.`、`10.`、`internal.`、`api-key`）
 - 移动端配置（`AndroidManifest`、`Info.plist`）中的第三方 SDK key
+- 包管理器/容器配置：`.npmrc` 的 `_authToken`、`.pypirc` 的明文 `password`、Docker `config.json` 的 `auth` base64、Kubernetes Secret 清单
 - 错误处理中把连接串带进异常消息
 
 ## 2. 高危硬编码模式（按此核对扫描结果）
@@ -47,3 +48,11 @@
 - **供应链劫持**：依赖是否锁版本与哈希（lock 文件提交）、`postinstall` 脚本是否来自不常见包、镜像源是否为官方/可信私有源。
 - **账号劫持**：改邮箱/手机是否需要验证旧凭据；找回密码 token 的熵与时效；OAuth 回调 redirect_uri 是否校验（开放重定向可劫持授权码）。
 - **开放重定向**：`redirect(参数)` 未白名单校验（`next=`、`returnUrl=`），配合钓鱼与 OAuth 劫持。
+
+## 6. 报告脱敏与泄露处置
+
+- 报告中的密钥只保留前后各 4 位，中间 `****`；`Authorization`/`Cookie`/password/token 整体 `[REDACTED]`。
+- 手机号、邮箱、身份证、银行卡做掩码；内网地址保留网段、隐去主机名。
+- 完整未脱敏证据单独存放，目录权限最小化，不提交 git、不放共享盘；报告只引用"证据文件编号 + 位置"。
+- 发现已提交的密钥：**先轮换，再清理历史**；只删文件不算修复。轮换步骤写进报告，并记录轮换负责人/截止时间。
+- 报告文件本身加入 `.gitignore`；默认输出到 `security-reports/`，不要放在仓库根目录。
