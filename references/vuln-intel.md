@@ -51,9 +51,9 @@ forum repost. Record the source URL and publication date for every item. The rep
 "search date" MUST be the actual execution date, not an example date copied from this
 document.
 
-**In-the-wild bonus:** mark a CVE with `⚡` when it appears in the CISA KEV catalog or a
-source states that a PoC or in-the-wild exploitation exists. Raise its severity accordingly
-(see Section 5).
+**In-the-wild bonus:** mark a CVE with `[EXPLOITED]` when it appears in the CISA KEV
+catalog or a source states that a PoC or in-the-wild exploitation exists. Raise its
+severity accordingly (see Section 5).
 
 ## 4. Impact verification (prevent "report every CVE")
 
@@ -71,10 +71,10 @@ For every candidate, answer three questions. If you cannot answer them, discard 
 ```text
 | CVE/ID | Component | Affected range | Project version | Affected | CVSS/severity | In the wild | Fixed version | Action |
 |---|---|---|---|---|---|---|---|---|
-| CVE-<year>-XXXXX | fastjson 1.2.x | < 1.2.83 | 1.2.76 | yes | 9.8 | ⚡ PoC exists | 1.2.83 | Upgrade immediately; disable the deserialization entry point before upgrading |
+| CVE-<year>-XXXXX | fastjson 1.2.x | < 1.2.83 | 1.2.76 | yes | 9.8 | [EXPLOITED] PoC exists | 1.2.83 | Upgrade immediately; disable the deserialization entry point before upgrading |
 ```
 
-Severity mapping when merging into the main findings table: affected + in-the-wild `⚡` →
+Severity mapping when merging into the main findings table: affected + `[EXPLOITED]` →
 P0; affected + CVSS ≥ 9 → P0; affected → P1; theoretically affected (trigger not met) →
 P3, recorded for awareness; review required → "manual review required", not in the main
 table.

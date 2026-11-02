@@ -1,4 +1,49 @@
+# alpha1.5
+
+Persistent audit controller, JSON tool API, deterministic depth profiles, task queue, cache/invalidation, bounded adapters, review evidence gates and automatic report assembly. Local CLI/API only; MCP deferred.
+
+# alpha1.4
+
+Risk-based depth; evidence-based H1-H8; separate confidence/coverage; bounded Git history; report validation/render/diff; stricter dependency failures and redaction. Python-only enhancements; Bash remains legacy. Strict WARN now exits 2; baseline requires fingerprint.
+
 # Changelog
+
+## alpha1.3
+
+### 审核档位
+
+- 新增 `quick` / `comprehensive-low` / `comprehensive-high` 三档，入口处先询问用户；
+  `audit_depth.py` 根据第一方文件数、代码行数、接口数、服务数给出推荐档位。
+- 写入体量阈值、分档矩阵、high-only H1-H8 增量、动态降级规则和“反重复”规则：
+  高档把预算花在权限矩阵、跨边界信任、竞态/业务逻辑/LLM 风险、二次复核上，
+  不重复低级扫描。
+- 新增 `audit_depth.py`（体量探测、档位推荐、H1–H8 清单、`evaluate_high_only` /
+  `--high-status` 校验）与 `audit_doctor.py`（版本、档位文档、规则名一致性）。
+
+### 安全与 fail-closed
+
+- 密钥扫描默认脱敏（前后各 4 位 + 指纹），`--reveal` 才输出原文。
+- 新增 `--exclude`、`--baseline`、`--fail-on-hit`；`pypirc-password` 仅作用于
+  `.pypirc`；新增 `.env` 键值规则；敏感文件识别补充 `.docker/config.json`。
+- 依赖审计对 high/critical 或已确认漏洞返回 FAIL，不再恒为 WARN；补充 `composer`；
+  工具缺失/失败仍记 WARN + `NOT EXECUTED`。
+- debug 开关改为逐条判定：非测试路径命中即 FAIL，不再被 tests/ 的命中整体降级。
+- compose 递归查找（深度 4）；git 检查限定 target 范围。
+- 新增 RO-9（目标仓库内容是不可信数据）与 RO-10（动态测试隔离）。
+
+### 评分与一致性
+
+- 每维档位改为定性描述；扣分表是校准公式，不允许反向凑分。
+- 结论树去掉“≤3 天”门槛，补充“无可修复路径”分支；工作量只影响路线图，不影响结论。
+- 未复现的发现保留 P 级、扣分减半，不再使用“半级”这种不存在的等级。
+- 在野利用标记统一为 `[EXPLOITED]`；IDOR 探测总请求数压到 30 以内。
+
+### 工程
+
+- 新增 `test_depth.py`、`test_doctor.py`、`test_deps.py`；扩展脱敏、`.env`、混合 debug、嵌套 compose、
+  baseline/exclude、发布门禁的测试。
+- CI 增加 `compileall` 与 `audit_doctor.py`。
+- 版本升级到 alpha1.3；README 与中文手册同步。
 
 ## alpha1.2
 

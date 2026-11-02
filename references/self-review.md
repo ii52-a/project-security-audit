@@ -1,9 +1,11 @@
 # Project Self-Review Workflow
 
 A full audit (ten stages) is expensive and not suitable for daily execution. This document
-defines a sustainable self-review cadence and serves as the skill's **quick mode**: when
-the user asks for a self-review, self-check, or pre-release check, the agent runs the
-A-track and produces a lightweight report without starting the full ten-stage workflow.
+defines a sustainable self-review cadence and serves as the skill's **quick mode**
+(`quick` in `SKILL.md` Section 1.1): when the user asks for a self-review, self-check, or
+pre-release check, the agent runs the A-track and produces a lightweight report without
+starting the full ten-stage workflow. If the user asks for a comprehensive audit, do not
+use this file as the execution path.
 
 ## A-track: pre-release quick check (target ≤15 minutes, excluding dependency-audit network time)
 
@@ -11,11 +13,11 @@ Run before every release, by a developer or an agent:
 
 ```bash
 # 1. One-command self-check (secrets + dependency audit + Git hygiene + debug switches + unsafe deployment defaults).
-# Prefer Python (Windows/Linux/macOS). --strict returns non-zero when a FAIL exists, suitable for CI.
+# Prefer Python (Windows/Linux/macOS). --strict: 1 for FAIL, 2 for WARN/incomplete, 0 otherwise.
 python <skill-dir>/scripts/self_check.py <project-dir> --strict
 
 # If Python is unavailable, use the bash version (Linux/macOS or Git Bash; the Windows built-in bash.exe may be a WSL launcher).
-bash <skill-dir>/scripts/self_check.sh <project-dir> --strict
+bash <skill-dir>/scripts/self_check.sh <project-dir> --strict  # legacy; lacks alpha1.4 WARN gate
 
 # 2. High-risk change review: select changes since the last review that touch security boundaries.
 git diff --stat v<last-release-tag>..HEAD -- '*auth*' '*login*' '*permission*' '*upload*' '*pay*' '*config*'

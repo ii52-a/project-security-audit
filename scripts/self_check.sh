@@ -14,7 +14,7 @@ for arg in "$@"; do
   case "$arg" in
     --strict) STRICT=1 ;;
     -h|--help)
-      sed -n '2,8p' "$0"
+      sed -n '2,9p' "$0"
       exit 0
       ;;
     *) TARGET="$arg" ;;
@@ -33,7 +33,7 @@ say() { # say <级别> <消息>
 }
 echo "== self_check: $TARGET  ($(date '+%F %T')) =="
 
-# ── 1. 密钥与硬编码扫描（复用 scan_secrets.sh）──────────────────
+# ── 1. 密钥与硬编码扫描（复用 scan_secrets.sh；默认脱敏）──────────
 echo "-- [1/5] 密钥扫描 --"
 secret_out=$(bash "$SKILL_DIR/scripts/scan_secrets.sh" "$TARGET" 2>&1)
 secret_status=$?
@@ -43,7 +43,7 @@ if [ "$secret_status" -ne 0 ]; then
 else
   secret_hits=$(printf '%s\n' "$secret_out" | grep -c '| \[' || true)
   if [ "$secret_hits" -gt 0 ]; then
-    say FAIL "密钥扫描命中 $secret_hits 处候选（逐条人工确认后定级）"
+    say FAIL "密钥扫描命中 $secret_hits 处候选（逐条人工确认后定级；已脱敏）"
     printf '%s\n' "$secret_out" | grep '| \[' | head -20
   else
     say PASS "密钥扫描无正则命中（仍需人工补查日志/前端产物）"
@@ -61,35 +61,98 @@ fi
 
 # ── 2. 依赖漏洞审计 ────────────────────────────────────────────
 echo "-- [2/5] 依赖审计 --"
-if [ -f "$TARGET/package-lock.json" ]; then
+dep_done=0
+if [ -f "$TARGET/package-lock.json" ] || [ -f "$TARGET/npm-shrinkwrap.json" ]; then
+  dep_done=1
   if command -v npm >/dev/null 2>&1; then
-    (cd "$TARGET" && npm audit --omit=dev 2>&1 | tail -5)
-    say WARN "已运行 npm audit，上方输出中 0 high/critical 才算通过（脚本不代判）"
-  else say WARN "有 package-lock.json 但本机无 npm，跳过"; fi
-elif [ -f "$TARGET/requirements.txt" ]; then
+    dep_out=$(cd "$TARGET" && npm audit --omit=dev --audit-level=high 2>&1); dep_rc=$?
+    printf '%s\n' "$dep_out" | tail -5
+    if [ "$dep_rc" -eq 0 ]; then
+      say PASS "npm audit 未发现 high/critical"
+    else
+      say FAIL "npm audit 发现 high/critical 或执行失败（退出码 $dep_rc）"
+    fi
+  else
+    say WARN "有 package-lock.json 但本机无 npm，跳过（NOT EXECUTED）"
+  fi
+fi
+if [ -f "$TARGET/requirements.txt" ]; then
+  dep_done=1
   if command -v pip-audit >/dev/null 2>&1; then
-    pip-audit -r "$TARGET/requirements.txt" 2>&1 | tail -5
-    say WARN "已运行 pip-audit，无输出行才算通过（脚本不代判）"
-  else say WARN "有 requirements.txt 但未装 pip-audit（pip install pip-audit）"; fi
-elif [ -f "$TARGET/go.mod" ]; then
+    dep_out=$(pip-audit -r "$TARGET/requirements.txt" 2>&1); dep_rc=$?
+    printf '%s\n' "$dep_out" | tail -5
+    if [ "$dep_rc" -eq 0 ]; then
+      say PASS "pip-audit 未发现已知漏洞"
+    elif [ "$dep_rc" -eq 1 ]; then
+      say FAIL "pip-audit 发现存在已知漏洞的依赖"
+    else
+      say WARN "pip-audit 退出码 $dep_rc，需人工判断"
+    fi
+  else
+    say WARN "有 requirements.txt 但未装 pip-audit（NOT EXECUTED）"
+  fi
+fi
+if [ -f "$TARGET/go.mod" ]; then
+  dep_done=1
   if command -v govulncheck >/dev/null 2>&1; then
-    (cd "$TARGET" && govulncheck ./... 2>&1 | tail -5)
-    say WARN "已运行 govulncheck，按输出判定"
-  else say WARN "有 go.mod 但未装 govulncheck"; fi
-else
-  say WARN "未识别依赖清单（package-lock/requirements/go.mod），依赖审计跳过"
+    dep_out=$(cd "$TARGET" && govulncheck ./... 2>&1); dep_rc=$?
+    printf '%s\n' "$dep_out" | tail -5
+    if printf '%s\n' "$dep_out" | grep -q "Vulnerability"; then
+      say FAIL "govulncheck 发现可达漏洞"
+    elif [ "$dep_rc" -eq 0 ]; then
+      say PASS "govulncheck 未发现可达漏洞"
+    else
+      say WARN "govulncheck 退出码 $dep_rc，需人工判断"
+    fi
+  else
+    say WARN "有 go.mod 但未装 govulncheck（NOT EXECUTED）"
+  fi
+fi
+if [ -f "$TARGET/Cargo.toml" ]; then
+  dep_done=1
+  if command -v cargo >/dev/null 2>&1; then
+    dep_out=$(cd "$TARGET" && cargo audit 2>&1); dep_rc=$?
+    printf '%s\n' "$dep_out" | tail -5
+    if printf '%s\n' "$dep_out" | grep -qiE "vulnerabilit(y|ies) found"; then
+      say FAIL "cargo audit 发现漏洞"
+    elif [ "$dep_rc" -eq 0 ]; then
+      say PASS "cargo audit 未发现漏洞"
+    else
+      say WARN "cargo audit 退出码 $dep_rc，需人工判断"
+    fi
+  else
+    say WARN "有 Cargo.toml 但未装 cargo-audit（NOT EXECUTED）"
+  fi
+fi
+if [ -f "$TARGET/composer.json" ]; then
+  dep_done=1
+  if command -v composer >/dev/null 2>&1; then
+    dep_out=$(cd "$TARGET" && composer audit 2>&1); dep_rc=$?
+    printf '%s\n' "$dep_out" | tail -5
+    if printf '%s\n' "$dep_out" | grep -qiE "found [0-9]+ (security )?vulnerabilit"; then
+      say FAIL "composer audit 发现安全通告"
+    elif [ "$dep_rc" -eq 0 ]; then
+      say PASS "composer audit 未发现安全通告"
+    else
+      say WARN "composer audit 退出码 $dep_rc，需人工判断"
+    fi
+  else
+    say WARN "有 composer.json 但未装 composer（NOT EXECUTED）"
+  fi
+fi
+if [ "$dep_done" -eq 0 ]; then
+  say WARN "未识别依赖清单（package-lock/requirements/go.mod/Cargo.toml/composer.json），依赖审计跳过"
 fi
 
 # ── 3. git 卫生 ────────────────────────────────────────────────
 echo "-- [3/5] git 卫生 --"
 if git -C "$TARGET" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
-  tracked=$(git -C "$TARGET" ls-files | grep -Ei '\.env$|\.env\.|\.pem$|\.key$|\.p12$|\.pfx$|id_rsa' || true)
+  tracked=$(git -C "$TARGET" ls-files -- . | grep -Ei '\.env$|\.env\.|\.pem$|\.key$|\.p12$|\.pfx$|id_rsa|credentials' || true)
   if [ -n "$tracked" ]; then say FAIL "敏感文件已被 git 跟踪: $tracked"; else say PASS "无敏感文件被 git 跟踪"; fi
   if [ -f "$TARGET/.gitignore" ]; then
     grep -qE '^\.env|^/?\.env$|\.env\b' "$TARGET/.gitignore" && say PASS ".gitignore 覆盖 .env" || say WARN ".gitignore 未显式忽略 .env"
   else say WARN "无 .gitignore"; fi
-  # 大小写防御：历史里是否出现过疑似密钥提交（只看最近 200 条，深查用完整审核）
-  if git -C "$TARGET" log --oneline -200 --diff-filter=A -- '*.env' '*.pem' '*.key' '*.p12' 2>/dev/null | grep -q .; then
+  if git -C "$TARGET" log --oneline -200 --diff-filter=A --relative -- '*.env' '*.pem' '*.key' '*.p12' 2>/dev/null | grep -q .; then
     say FAIL "git 历史近 200 条中添加过疑似敏感文件（视为已泄露，需轮换）"
   else say PASS "git 历史近 200 条未见敏感文件新增记录"; fi
 else
@@ -107,20 +170,25 @@ debug_hits=$(grep -rnEIi \
   '(debug[[:space:]]*[:=][[:space:]]*true|app\.run\([^)]*debug[[:space:]]*=[[:space:]]*true)' \
   "$TARGET" 2>/dev/null | grep -vE 'node_modules|\.git/|dist/|build/' | head -10 || true)
 if [ -n "$debug_hits" ]; then
-  if printf '%s\n' "$debug_hits" | grep -Eq '(^|/)(tests?|spec|__tests__|fixtures?)/'; then
-    say WARN "发现 debug 开关（含测试/fixture 路径，逐条确认是否生产配置），位置:"
+  debug_bad=$(printf '%s\n' "$debug_hits" | grep -vE '(^|/)(tests?|spec|__tests__|fixtures?)/' || true)
+  if [ -n "$debug_bad" ]; then
+    say FAIL "源码/配置中发现 debug 开关（非测试路径；若属生产配置即中招），位置:"
+    printf '%s\n' "$debug_bad"
   else
-    say FAIL "源码/配置中发现 debug 开关（若属生产配置即中招），位置:"
+    say WARN "仅在测试/fixture 路径发现 debug 开关，逐条确认是否生产配置，位置:"
+    printf '%s\n' "$debug_hits"
   fi
-  printf '%s\n' "$debug_hits"
 else say PASS "未见 debug=true / debug: true"; fi
 
 # ── 5. 危险部署默认值 ──────────────────────────────────────────
 echo "-- [5/5] 部署默认值 --"
 compose_files=()
-for f in "$TARGET"/docker-compose*.yml "$TARGET"/docker-compose*.yaml "$TARGET"/compose*.yml "$TARGET"/compose*.yaml; do
-  [ -f "$f" ] && compose_files+=("$f")
-done
+while IFS= read -r f; do
+  [ -n "$f" ] && compose_files+=("$f")
+done < <(find "$TARGET" -maxdepth 4 -type f \( \
+  -name 'docker-compose*.yml' -o -name 'docker-compose*.yaml' \
+  -o -name 'compose*.yml' -o -name 'compose*.yaml' \) \
+  ! -path '*/node_modules/*' ! -path '*/.git/*' ! -path '*/dist/*' ! -path '*/build/*' 2>/dev/null)
 if [ "${#compose_files[@]}" -gt 0 ]; then
   if grep -nE '(MYSQL|POSTGRES|MONGO|REDIS)_(ROOT_)?PASSWORD[[:space:]]*:[[:space:]]*["'"'"']?(root|123456|password|admin|postgres)["'"'"']?[[:space:]]*$' "${compose_files[@]}" 2>/dev/null; then
     say FAIL "docker-compose 使用常见弱默认密码（上方行）"
@@ -132,7 +200,7 @@ while IFS= read -r conf; do
   [ -z "$conf" ] && continue
   hits=$(grep -n 'autoindex on' "$conf" 2>/dev/null || true)
   [ -n "$hits" ] && nginx_hits="${nginx_hits}${conf}:${hits}"$'\n'
-done < <(find "$TARGET" -maxdepth 3 -name '*.conf' -path '*nginx*' -print 2>/dev/null)
+done < <(find "$TARGET" -maxdepth 4 -name '*.conf' -path '*nginx*' -print 2>/dev/null)
 if [ -n "$nginx_hits" ]; then
   say WARN "nginx 开启 autoindex（目录可列表）:"
   printf '%s' "$nginx_hits"

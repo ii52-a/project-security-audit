@@ -2,7 +2,7 @@
 
 Static review produces suspected vulnerabilities. This stage validates them from an
 attacker's perspective: reproducible issues are marked `[VERIFIED]`; non-reproducible
-issues are excluded or downgraded. Do not fill the report with speculation.
+issues remain `NOT REPRODUCED`, with limitations recorded; do not infer absence or reduce severity.
 
 **Read this file top to bottom, including the authorization gate, before executing any
 command.**
@@ -31,6 +31,11 @@ Confirm each item in order. If any item fails, perform static review only and re
    running.
 3. **Capability.** The application can start locally and pass a health check. If it cannot
    start, record the hypothesis as "not verifiable".
+
+> **Isolation (RO-10).** Run the target in a container, VM, or disposable test host with no
+> production credentials and no production network access. If isolation is unavailable,
+> skip dynamic testing and record `NOT EXECUTED (no isolation)`. A running application is
+> not, by itself, evidence of isolation.
 
 ### Hard red lines (never cross)
 
@@ -122,10 +127,10 @@ forged token → confirmed P0.
 
 ```bash
 # Prefer the real ID returned when B creates the resource (B_ID).
-# Enumerate 1..30 only when IDs are numeric.
+# Enumerate 1..29 only when IDs are numeric (30 requests including B_ID).
 # A accesses B's resource; matching the second account's username confirms the issue.
 B_ID="${B_ID:-17}"
-for id in "$B_ID" {1..30}; do
+for id in "$B_ID" {1..29}; do
   code=$(curl -s -o "$TMP/atk_body" -w '%{http_code}' -b a.jar "$BASE/api/orders/$id")
   grep -q "audit_b" "$TMP/atk_body" && echo "ATK: A read B's resource id=$id ($code)"
 done
@@ -278,8 +283,8 @@ Record one row per attack in the report's "Dynamic attack-test record":
 ```text
 | ID | Technique | Target | Request summary | Response summary (redacted) | Conclusion |
 | ATK-01 | IDOR | GET /api/orders/17 (A session) | cookie: audit_a (masked) | 200, contains audit_b's masked phone number | ✅ Confirmed [P1][VERIFIED] |
-| ATK-02 | SQLi time-based | GET /api/items?id= | id=1;SLEEP(2)-- | no time_total difference | ❌ Excluded |
-| ATK-03 | Race condition | POST /api/coupon/redeem | 15 concurrent | only 1 success | ❌ Excluded (lock/unique constraint) |
+| ATK-02 | SQLi time-based | GET /api/items?id= | id=1;SLEEP(2)-- | no time_total difference | ❌ Not reproduced |
+| ATK-03 | Race condition | POST /api/coupon/redeem | 15 concurrent | only 1 success | ❌ Not reproduced (lock/unique constraint) |
 ```
 
 - Mask cookies, tokens, passwords, phone numbers, email addresses, and national IDs in the
@@ -287,8 +292,8 @@ Record one row per attack in the report's "Dynamic attack-test record":
   report or commit it to Git.
 - A confirmed item MUST also appear in the main findings table with a `[VERIFIED]` tag and
   an attack-ID reference.
-- An excluded item closes the corresponding static suspicion: downgrade that static
-  finding by half a level and note `NOT REPRODUCED (ATK-xx)`.
+- A non-reproduced item remains open for review: retain severity and note
+  `NOT REPRODUCED (ATK-xx)`, tested path and environment limitations. Do not halve deductions.
 - List "not verifiable" items separately with the reason; do not guess a conclusion.
 
 ## 5. Cleanup and close-out

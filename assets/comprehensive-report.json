@@ -1,0 +1,29 @@
+{
+  "project": "",
+  "date": "",
+  "scope": [],
+  "limitations": [
+    "Fill scope and known omissions"
+  ],
+  "depth": "comprehensive-low",
+  "coverage": {
+    "files": {
+      "reviewed": 0,
+      "total": 0
+    },
+    "interfaces": {
+      "reviewed": 0,
+      "total": 0
+    }
+  },
+  "coverage_complete": false,
+  "checks": [],
+  "findings": [],
+  "dynamic": {
+    "executed": false,
+    "reason": "Not authorized or not needed; replace with actual reason"
+  },
+  "redaction_reviewed": false,
+  "conclusion": "manual review required",
+  "roadmap": []
+}

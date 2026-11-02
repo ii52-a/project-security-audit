@@ -2,16 +2,16 @@
 """self_check.py — 跨平台发布前快速自检。
 
 用法:
-    python scripts/self_check.py [项目目录] [--strict] [--json] [--skip-deps]
+    python scripts/self_check.py [项目目录] [--strict] [--json] [--skip-deps] [--timeout 120]
 
 检查:
-  1. 密钥/凭据扫描（复用 scan_secrets.py）
-  2. 依赖漏洞审计（npm / pip-audit / govulncheck / cargo / composer）
+  1. 密钥/凭据扫描（复用 scan_secrets.py；默认脱敏）
+  2. 依赖漏洞审计（npm / pip-audit / govulncheck / cargo / composer；高危 FAIL）
   3. git 卫生（敏感文件是否被跟踪、.gitignore、近 200 条历史）
-  4. 调试开关（debug=true / debug: true，含 .env）
-  5. 危险部署默认值（compose 弱密码、nginx autoindex）
+  4. 调试开关（debug=true / debug: true，含 .env；按路径区分生产/测试）
+  5. 危险部署默认值（递归 compose 弱密码、nginx autoindex）
 
-默认只报告、退出码 0；--strict 时存在 FAIL 返回 1。
+默认只报告、退出码 0；--strict 时 FAIL 返回 1，WARN 返回 2。
 脚本只读，不修改项目文件。结果需人工确认。
 """
 
@@ -35,7 +35,7 @@ except ImportError:  # pragma: no cover - 允许从其他目录导入
     from scan_secrets import VERSION as SCAN_VERSION
     from scan_secrets import scan as scan_secrets
 
-VERSION = "alpha1.1"
+VERSION = "alpha1.5"
 
 EXCLUDE_DIRS = {
     ".git", "node_modules", "dist", "build", "vendor", "__pycache__",
@@ -53,6 +53,8 @@ DEBUG_RE = re.compile(
     r"(?:debug\s*[:=]\s*true|app\.run\s*\([^)]*debug\s*=\s*true|DEBUG\s*[:=]\s*true)",
     re.I,
 )
+
+TEST_PATH_RE = re.compile(r"(^|/)(tests?|spec|specs|__tests__|fixtures?)/", re.I)
 
 WEAK_COMPOSE_RE = re.compile(
     r"(?:MYSQL|POSTGRES|MONGO|REDIS)_(?:ROOT_)?PASSWORD\s*:\s*[\"']?(?:root|123456|password|admin|postgres)[\"']?\s*$",
@@ -124,6 +126,26 @@ def run(cmd: list[str], cwd: Path, timeout: int) -> tuple[int, str]:
         return 126, f"命令执行失败: {exc}"
 
 
+def _tail(output: str, lines: int = 12) -> str:
+    return "[RAW TOOL OUTPUT OMITTED: may contain credentials; inspect locally]"
+
+
+def _json_from_output(output: str):
+    """Extract the first JSON object/array from tool output that may have banners."""
+    start_obj = output.find("{")
+    start_arr = output.find("[")
+    starts = [pos for pos in (start_obj, start_arr) if pos >= 0]
+    if not starts:
+        return None
+    start = min(starts)
+    decoder = json.JSONDecoder()
+    try:
+        data, _ = decoder.raw_decode(output[start:])
+        return data
+    except json.JSONDecodeError:
+        return None
+
+
 def check_secrets(report: Report, target: Path) -> None:
     check = "secrets-hits"
     try:
@@ -134,13 +156,15 @@ def check_secrets(report: Report, target: Path) -> None:
 
     hits = result["hits"]
     sensitive = result["sensitive_files"]
+    if any(x['reason'] == 'read error' for x in result.get('skipped', [])):
+        report.add('WARN', 'secrets-coverage', 'Unreadable files: secret scan incomplete')
     if hits:
         details = [
             f"{h['file']}:{h['line']} [{h['rule']}] {h['snippet']}" for h in hits[:20]
         ]
         if len(hits) > 20:
             details.append(f"... 其余 {len(hits) - 20} 处省略")
-        report.add("FAIL", check, f"密钥扫描命中 {len(hits)} 处候选（逐条人工确认后定级）", details)
+        report.add("FAIL", check, f"密钥扫描命中 {len(hits)} 处候选（逐条人工确认后定级；已脱敏）", details)
     else:
         report.add("PASS", check, "密钥扫描无正则命中（仍需人工补查日志/前端产物/git 历史）")
 
@@ -151,56 +175,144 @@ def check_secrets(report: Report, target: Path) -> None:
         report.add("WARN", "secrets-files", f"发现 {len(sensitive)} 个疑似敏感文件（确认是否被忽略/是否含真值）", details)
 
 
+def _dep_npm(target: Path, timeout: int) -> tuple[str, str, list[str]]:
+    npm = shutil.which("npm")
+    if not npm:
+        return "WARN", "有 package-lock.json 但本机无 npm，跳过（NOT EXECUTED）", []
+    code, output = run([npm, "audit", "--json", "--omit=dev"], target, timeout)
+    data = _json_from_output(output)
+    if isinstance(data, dict) and not data.get("error") and ("advisories" in data or isinstance(data.get("metadata"), dict)):
+        vulns = (data.get("metadata") or {}).get("vulnerabilities") or {}
+        high = int(vulns.get("high", 0) or 0) + int(vulns.get("critical", 0) or 0)
+        total = int(vulns.get("total", 0) or 0)
+        if not vulns:
+            advisories = data.get("advisories") or {}
+            if isinstance(advisories, dict):
+                items = [item for item in advisories.values() if isinstance(item, dict)]
+                high = sum(1 for item in items if str(item.get("severity", "")).lower() in ("high", "critical"))
+                total = len(items)
+        if high:
+            return "FAIL", f"npm audit 发现 {high} 个 high/critical 漏洞（退出码 {code}）", [_tail(output)]
+        if total:
+            return "WARN", f"npm audit 发现 {total} 个低/中危漏洞（退出码 {code}），需人工判断", [_tail(output)]
+        if code == 0 and (vulns or "advisories" in data):
+            return "PASS", "npm audit 未发现漏洞", []
+    if code == 0:
+        return "WARN", "npm audit 输出无法验证（PARSE ERROR）", []
+    return "WARN", f"npm audit 退出码 {code}，无法解析 JSON，需人工判断", [_tail(output)]
+
+
+def _dep_pip(target: Path, timeout: int) -> tuple[str, str, list[str]]:
+    pip_audit = shutil.which("pip-audit")
+    if not pip_audit:
+        return "WARN", "有 requirements.txt 但未装 pip-audit（NOT EXECUTED）", []
+    code, output = run([pip_audit, "-r", "requirements.txt", "--format", "json"], target, timeout)
+    data = _json_from_output(output)
+    vulnerable = 0
+    if isinstance(data, dict):
+        data = data.get("dependencies")
+    if isinstance(data, list):
+        vulnerable = sum(1 for item in data if isinstance(item, dict) and item.get("vulns"))
+    if vulnerable:
+        return "FAIL", f"pip-audit 发现 {vulnerable} 个存在已知漏洞的依赖", [_tail(output)]
+    if code == 0 and isinstance(data, list) and all(isinstance(x, dict) and isinstance(x.get("vulns"), list) for x in data):
+        return "PASS", "pip-audit 未发现已知漏洞", []
+    return "WARN", f"pip-audit 退出码 {code}，需人工判断", [_tail(output)]
+
+
+def _dep_govuln(target: Path, timeout: int) -> tuple[str, str, list[str]]:
+    govulncheck = shutil.which("govulncheck")
+    if not govulncheck:
+        return "WARN", "有 go.mod 但未装 govulncheck（NOT EXECUTED）", []
+    code, output = run([govulncheck, "-json", "./..."], target, timeout)
+    findings = output.count('"finding"')
+    if findings:
+        return "FAIL", f"govulncheck 发现 {findings} 条可达漏洞", [_tail(output)]
+    if code == 0 and isinstance(_json_from_output(output), dict) and "config" in _json_from_output(output):
+        return "PASS", "govulncheck 未发现可达漏洞", []
+    return "WARN", f"govulncheck 退出码 {code}，需人工判断", [_tail(output)]
+
+
+def _dep_cargo(target: Path, timeout: int) -> tuple[str, str, list[str]]:
+    cargo = shutil.which("cargo")
+    if not cargo:
+        return "WARN", "有 Cargo.toml 但未装 cargo/cargo-audit（NOT EXECUTED）", []
+    code, output = run([cargo, "audit", "--json"], target, timeout)
+    data = _json_from_output(output)
+    found = 0
+    if isinstance(data, dict):
+        vulns = data.get("vulnerabilities") or {}
+        if isinstance(vulns, dict):
+            found = int(vulns.get("count", 0) or 0) if vulns.get("found") else 0
+            if isinstance(vulns.get("list"), list):
+                found = len(vulns["list"])
+    if found:
+        return "FAIL", f"cargo audit 发现 {found} 个漏洞", [_tail(output)]
+    if code == 0 and isinstance(data, dict) and isinstance(data.get("vulnerabilities"), dict) and "list" in data["vulnerabilities"]:
+        return "PASS", "cargo audit 未发现漏洞", []
+    return "WARN", f"cargo audit 退出码 {code}，需人工判断", [_tail(output)]
+
+
+def _dep_composer(target: Path, timeout: int) -> tuple[str, str, list[str]]:
+    composer = shutil.which("composer")
+    if not composer:
+        return "WARN", "有 composer.json 但未装 composer（NOT EXECUTED）", []
+    code, output = run([composer, "audit", "--format=json"], target, timeout)
+    data = _json_from_output(output)
+    found = 0
+    if isinstance(data, dict):
+        advisories = data.get("advisories") or {}
+        if isinstance(advisories, dict):
+            found = sum(len(items) for items in advisories.values() if isinstance(items, list))
+    if found:
+        return "FAIL", f"composer audit 发现 {found} 条安全通告", [_tail(output)]
+    if code == 0 and isinstance(data, dict) and isinstance(data.get("advisories"), (dict, list)):
+        return "PASS", "composer audit 未发现安全通告", []
+    return "WARN", f"composer audit 退出码 {code}，需人工判断", [_tail(output)]
+
+
+def _safe_dependency(check, target, timeout):
+    try:
+        return check(target, timeout)
+    except (ValueError, TypeError, AttributeError, KeyError):
+        return 'WARN', 'Dependency tool output malformed (PARSE ERROR)', []
+
+
 def check_dependencies(report: Report, target: Path, timeout: int, skip: bool) -> None:
-    check = "dependencies"
     if skip:
-        report.add("WARN", check, "已通过 --skip-deps 跳过依赖审计")
+        report.add("WARN", "dependencies", "已通过 --skip-deps 跳过依赖审计")
         return
 
+    detectors = []
     if (target / "package-lock.json").exists() or (target / "npm-shrinkwrap.json").exists():
-        npm = shutil.which("npm")
-        if not npm:
-            report.add("WARN", check, "有 package-lock.json 但本机无 npm，跳过")
-            return
-        code, output = run([npm, "audit", "--omit=dev"], target, timeout)
-        tail = "\n".join(output.splitlines()[-8:])
-        report.add("WARN", check, f"已运行 npm audit（退出码 {code}），需人工判断 high/critical", [tail])
-        return
-
+        detectors.append(_safe_dependency(_dep_npm, target, timeout))
     if (target / "requirements.txt").exists():
-        pip_audit = shutil.which("pip-audit")
-        if not pip_audit:
-            report.add("WARN", check, "有 requirements.txt 但未装 pip-audit（pip install pip-audit）")
-            return
-        code, output = run([pip_audit, "-r", "requirements.txt"], target, timeout)
-        tail = "\n".join(output.splitlines()[-8:])
-        report.add("WARN", check, f"已运行 pip-audit（退出码 {code}），按输出判定", [tail])
-        return
-
+        detectors.append(_safe_dependency(_dep_pip, target, timeout))
     if (target / "go.mod").exists():
-        govulncheck = shutil.which("govulncheck")
-        if not govulncheck:
-            report.add("WARN", check, "有 go.mod 但未装 govulncheck")
-            return
-        code, output = run([govulncheck, "./..."], target, timeout)
-        tail = "\n".join(output.splitlines()[-8:])
-        report.add("WARN", check, f"已运行 govulncheck（退出码 {code}），按输出判定", [tail])
-        return
-
+        detectors.append(_safe_dependency(_dep_govuln, target, timeout))
     if (target / "Cargo.toml").exists():
-        cargo = shutil.which("cargo")
-        if not cargo:
-            report.add("WARN", check, "有 Cargo.toml 但未装 cargo")
-            return
-        code, output = run([cargo, "audit"], target, timeout)
-        tail = "\n".join(output.splitlines()[-8:])
-        report.add("WARN", check, f"已运行 cargo audit（退出码 {code}），按输出判定", [tail])
+        detectors.append(_safe_dependency(_dep_cargo, target, timeout))
+    if (target / "composer.json").exists():
+        detectors.append(_safe_dependency(_dep_composer, target, timeout))
+
+    if not detectors:
+        report.add("WARN", "dependencies",
+                   "未识别依赖清单（package-lock/requirements/go.mod/Cargo.toml/composer.json），依赖审计跳过")
         return
 
-    report.add("WARN", check, "未识别依赖清单（package-lock/requirements/go.mod/Cargo.toml），依赖审计跳过")
+    rank = {"PASS": 0, "WARN": 1, "FAIL": 2}
+    worst = max((item[0] for item in detectors), key=lambda level: rank.get(level, 1))
+    for index, (level, message, lines) in enumerate(detectors, 1):
+        # Keep each tool result visible; aggregate WARN is never a clean check.
+        report.add(level, 'dependency-tool-' + str(index), message, lines)
+    message = "；".join(item[1] for item in detectors)
+    details: list[str] = []
+    for _level, _message, lines in detectors:
+        details.extend(lines)
+    report.add(worst, "dependencies", message, details[:20])
 
 
-def check_git(report: Report, target: Path) -> None:
+def check_git(report: Report, target: Path, history_limit: int = 200) -> None:
     git = shutil.which("git")
     if not git:
         report.add("WARN", "git-repo", "本机无 git，git 卫生检查跳过")
@@ -210,7 +322,7 @@ def check_git(report: Report, target: Path) -> None:
         report.add("WARN", "git-repo", "非 git 仓库，git 卫生检查跳过")
         return
 
-    code, tracked = run([git, "-C", str(target), "ls-files"], target, 60)
+    code, tracked = run([git, "-C", str(target), "ls-files", "--", "."], target, 60)
     if code != 0:
         report.add("WARN", "git-tracked", "git ls-files 执行失败，git 卫生检查不完整")
         return
@@ -230,9 +342,11 @@ def check_git(report: Report, target: Path) -> None:
         else:
             report.add("WARN", "git-gitignore", ".gitignore 未显式忽略 .env")
 
+    if history_limit == 0:
+        return  # Controller runs its separately budgeted content-history check.
     code, history = run(
-        [git, "-C", str(target), "log", "--oneline", "-200", "--diff-filter=A",
-         "--", "*.env", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*"],
+        [git, "-C", str(target), "log", "--oneline", '-' + str(history_limit), "--diff-filter=A",
+         "--relative", "--", "*.env", "*.pem", "*.key", "*.p12", "*.pfx", "id_rsa*"],
         target,
         60,
     )
@@ -272,24 +386,39 @@ def check_debug(report: Report, target: Path) -> None:
         for lineno, line in enumerate(text.splitlines(), 1):
             if DEBUG_RE.search(line):
                 rel = path.relative_to(target).as_posix()
-                hits.append(f"{rel}:{lineno}: {line.strip()[:160]}")
+                hits.append(f"{rel}:{lineno}: [SOURCE OMITTED]")
     if not hits:
         report.add("PASS", check, "未见 debug=true / debug: true")
         return
-    details = hits[:10]
+
+    bad = [hit for hit in hits if not TEST_PATH_RE.search(hit)]
+    details = (bad if bad else hits)[:10]
     if len(hits) > 10:
         details.append(f"... 其余 {len(hits) - 10} 处省略")
-    if any(re.search(r"(^|/)(tests?|spec|__tests__|fixtures?)/", h) for h in hits):
-        report.add("WARN", check, "发现 debug 开关（含测试/fixture 路径，逐条确认是否生产配置）", details)
+    if bad:
+        report.add("FAIL", check, "源码/配置中发现 debug 开关（非测试路径；若属生产配置即中招）", details)
     else:
-        report.add("FAIL", check, "源码/配置中发现 debug 开关（若属生产配置即中招）", details)
+        report.add("WARN", check, "仅在测试/fixture 路径发现 debug 开关，逐条确认是否生产配置", details)
+
+
+def _iter_compose_files(target: Path):
+    seen: set[Path] = set()
+    for root, dirs, files in os.walk(target):
+        rel = Path(root).relative_to(target)
+        if len(rel.parts) > 4:
+            dirs[:] = []
+            continue
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        for name in sorted(files):
+            if re.fullmatch(r"(?:docker-compose|compose)[^/]*\.ya?ml", name, re.I):
+                path = Path(root) / name
+                if path not in seen:
+                    seen.add(path)
+                    yield path
 
 
 def check_deployment(report: Report, target: Path) -> None:
-    compose_files: list[Path] = []
-    for pattern in ("docker-compose*.yml", "docker-compose*.yaml", "compose*.yml", "compose*.yaml"):
-        compose_files.extend(target.glob(pattern))
-    compose_files = sorted({p for p in compose_files if p.is_file()})
+    compose_files = list(_iter_compose_files(target))
 
     weak: list[str] = []
     for path in compose_files:
@@ -299,7 +428,7 @@ def check_deployment(report: Report, target: Path) -> None:
             continue
         for lineno, line in enumerate(text.splitlines(), 1):
             if WEAK_COMPOSE_RE.search(line):
-                weak.append(f"{path.name}:{lineno}: {line.strip()[:160]}")
+                weak.append(f"{path.relative_to(target).as_posix()}:{lineno}: [SOURCE OMITTED]")
     if weak:
         report.add("FAIL", "deployment-compose", "docker-compose 使用常见弱默认密码", weak[:10])
     elif compose_files:
@@ -308,11 +437,24 @@ def check_deployment(report: Report, target: Path) -> None:
         report.add("PASS", "deployment-compose", "无 docker-compose 文件")
 
     nginx_files: list[Path] = []
-    for path in target.rglob("*.conf"):
-        if "nginx" in str(path).lower() and path.is_file():
+    for root, dirs, files in os.walk(target):
+        rel = Path(root).relative_to(target)
+        if len(rel.parts) > 4:
+            dirs[:] = []
+            continue
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        for name in sorted(files):
+            if not name.endswith(".conf"):
+                continue
+            path = Path(root) / name
+            if "nginx" not in str(path).lower():
+                continue
             nginx_files.append(path)
             if len(nginx_files) >= 20:
                 break
+        if len(nginx_files) >= 20:
+            break
+
     autoindex: list[str] = []
     for path in nginx_files:
         try:
@@ -351,10 +493,11 @@ def main(argv: list[str] | None = None) -> int:
     _configure_stdio()
     parser = argparse.ArgumentParser(description="发布前快速安全自检")
     parser.add_argument("target", nargs="?", default=".", help="项目目录（默认当前目录）")
-    parser.add_argument("--strict", action="store_true", help="存在 FAIL 时返回退出码 1")
+    parser.add_argument("--strict", action="store_true", help="FAIL 返回1，WARN/不完整返回2")
     parser.add_argument("--json", action="store_true", help="输出 JSON")
     parser.add_argument("--skip-deps", action="store_true", help="跳过依赖审计（离线/测试用）")
     parser.add_argument("--timeout", type=int, default=120, help="单条外部命令超时秒数，默认 120")
+    parser.add_argument("--version", action="version", version=VERSION)
     args = parser.parse_args(argv)
 
     target = Path(args.target).expanduser().resolve()
@@ -376,6 +519,8 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.strict and report.fail_count > 0:
         return 1
+    if args.strict and report.warn_count > 0:
+        return 2
     return 0
 
 

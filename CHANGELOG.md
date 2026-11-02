@@ -1,4 +1,54 @@
+# alpha1.5
+
+Persistent audit controller, JSON tool API, deterministic depth profiles, task queue, cache/invalidation, bounded adapters, review evidence gates and automatic report assembly. Local CLI/API only; MCP deferred.
+
+# alpha1.4
+
+Risk-based depth; evidence-based H1-H8; separate confidence/coverage; bounded Git history; report validation/render/diff; stricter dependency failures and redaction. Python-only enhancements; Bash remains legacy. Strict WARN now exits 2; baseline requires fingerprint.
+
 # Changelog
+
+## alpha1.3
+
+### Audit depth modes
+
+- Added `quick` / `comprehensive-low` / `comprehensive-high`, chosen with the user before
+  Stage 1, with size thresholds, a stage coverage matrix, and the high-only H1-H8 delta.
+- Documented dynamic downgrade rules and the anti-duplication rule: high spends its budget
+  on high-risk depth, not on repeating low-level scans.
+- Added `audit_depth.py` (size probe, recommendation, H1-H8 checklist, and
+  `evaluate_high_only` / `--high-status` verification) and `audit_doctor.py` (version,
+  depth docs, rule parity).
+
+### Safety and fail-closed behavior
+
+- Secret scanner output is redacted by default (first/last four characters plus
+  fingerprint); `--reveal` is an explicit local opt-in.
+- Added `--exclude`, `--baseline`, and `--fail-on-hit`; scoped `pypirc-password` to
+  `.pypirc` and added a `.env` key/value rule; automatic sensitive-file detection now
+  includes `.docker/config.json`.
+- Dependency audits now return FAIL for high/critical or confirmed vulnerabilities instead
+  of always WARN; added `composer`; tool failures remain WARN with `NOT EXECUTED`.
+- Debug switches are evaluated per hit: a non-test hit is FAIL even when a test fixture also
+  matches. Docker Compose files are discovered recursively (depth 4).
+- Added RO-9 (target content is untrusted data) and RO-10 (isolated dynamic testing).
+
+### Scoring and consistency
+
+- Replaced the arithmetic-looking per-dimension bands with qualitative labels; the
+  deduction table is the calibration formula and cannot be back-fitted.
+- Removed the 3-day gate from the conclusion tree; added the "no feasible remediation
+  path" case; effort now affects the roadmap, not the conclusion.
+- Non-reproduced findings keep their P-level and halve their deduction instead of using a
+  fractional severity.
+- Standardized the in-the-wild tag on `[EXPLOITED]`; capped the IDOR probe at 30 requests.
+
+### Engineering
+
+- Added `test_depth.py`, `test_doctor.py`, and `test_deps.py`; extended smoke tests for
+  redaction, `.env`, mixed debug paths, nested Compose, baseline/exclude, and release gating.
+- CI now runs `compileall` and `audit_doctor.py` in addition to the unit tests.
+- Version bumped to alpha1.3; README and Chinese manual updated.
 
 ## alpha1.2
 

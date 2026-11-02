@@ -1,6 +1,6 @@
 # AI 自攻击测试手册（动态攻击验证）
 
-静态审查发现"疑似漏洞"，本阶段以攻击者视角实际验证：能复现的标 [已验证]，不能复现的排除，避免报告里堆猜测。**本文件必须从上往下读完授权门再动手。**
+静态审查发现"疑似漏洞"，本阶段以攻击者视角实际验证：能复现的标 [已验证]，不能复现的标记未复现并记录限制，不代表排除。**本文件必须从上往下读完授权门再动手。**
 
 > **审核前快照（建议）**：动态测试会创建测试账号、canary 数据和临时配置。开始前提醒用户提交当前改动或打 tag，确保测试后能 `git diff` 复核并回滚；没有版本控制时建议先 `git init` 并做首次提交，在报告"审核范围与限制"中注明即可。**GitHub 不是必需条件，也不作为扣分项**；评分只看安全事实。不要为了审计把未提交的真实密钥/生产配置提交进仓库。
 
@@ -26,6 +26,8 @@
 ## 1. 环境准备
 
 > 以下命令是 bash/curl 模板，不是跨平台保证。Windows 请使用 Git Bash；没有 bash 时，静态扫描优先用 `scripts/*.py`，动态命令按语义改写为 PowerShell。`$TMP` 与 `$PY` 按本机环境设置（Linux 常见 `python3`，Windows 常见 `python`）。
+
+> **隔离（RO-10）**：优先在容器/VM/一次性测试主机中运行，禁止生产凭据和生产网络；没有隔离就跳过动态测试并记录 `NOT EXECUTED (no isolation)`。应用能启动不等于已隔离。
 
 ```bash
 # 启动（按项目实际方式）：docker compose up -d / npm run dev / make run
@@ -70,10 +72,10 @@ curl -s -H "Authorization: Bearer $H.$P." "$BASE/api/admin/users"
 ### 3.2 越权（IDOR）
 
 ```bash
-# 优先用 B 创建资源返回的真实 ID（B_ID）；只有数字 ID 时才追加枚举 1..30。
+# 优先用 B 创建资源返回的真实 ID（B_ID）；只有数字 ID 时才追加枚举 1..29（含 B_ID 共 30 次）。
 # A 会话访问 B 的资源，命中第二个账号的用户名即确认。
 B_ID="${B_ID:-17}"
-for id in "$B_ID" {1..30}; do
+for id in "$B_ID" {1..29}; do
   code=$(curl -s -o "$TMP/atk_body" -w '%{http_code}' -b a.jar "$BASE/api/orders/$id")
   grep -q "audit_b" "$TMP/atk_body" && echo "ATK: A 读到了 B 的资源 id=$id ($code)"
 done
@@ -196,14 +198,14 @@ curl -s -b a.jar -F 'file=@f.txt.php;type=image/jpeg' "$BASE/api/upload"    # �
 ```
 | 编号 | 技术 | 目标 | 请求摘要 | 响应摘要（已脱敏） | 结论 |
 | ATK-01 | IDOR | GET /api/orders/17 (A会话) | cookie: audit_a（打码） | 200, 含 audit_b 的掩码手机号 | ✅ 确认 [P1][已验证] |
-| ATK-02 | SQLi时间盲注 | GET /api/items?id= | id=1;SLEEP(2)-- | time_total 无差异 | ❌ 排除 |
-| ATK-03 | 竞态 | POST /api/coupon/redeem | 15 并发 | 仅 1 次成功 | ❌ 排除（有锁/唯一约束） |
+| ATK-02 | SQLi时间盲注 | GET /api/items?id= | id=1;SLEEP(2)-- | time_total 无差异 | ❌ 未复现 |
+| ATK-03 | 竞态 | POST /api/coupon/redeem | 15 并发 | 仅 1 次成功 | ❌ 未复现（有锁/唯一约束） |
 ```
 
 - 表格里的 cookie/token/密码、手机号/邮箱/身份证一律打码；完整未脱敏证据只放受控本地文件，不写入报告、不提交 git。
 
 - 确认项必须在"漏洞与风险发现"主表中同步出现并带 [已验证] 标签与攻击编号引用。
-- 排除项用于给静态疑点"销案"——主表中对应静态发现降半级并注明"动态未复现（ATK-xx）"。
+- 未复现项保持原严重程度，注明"动态未复现（ATK-xx）"、测试路径与环境限制，待复核；不自动销案或减半扣分。
 - 无法验证（环境起不来、依赖第三方真实凭据）单列，不猜结论。
 
 ## 5. 清理与收尾

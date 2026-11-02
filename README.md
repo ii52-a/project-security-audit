@@ -1,117 +1,40 @@
-# project-security-audit
+# security-audit
 
-`security-audit` is a security-audit skill for AI agents: static review, authorized
-AI-driven attack validation, vulnerability-intelligence correlation, risk scoring, and an
-actionable remediation report.
+Current version: **alpha1.5**
 
-Current version: **alpha1.2**
+Evidence-based security review with quick, comprehensive-low and comprehensive-high depths.
+Risk drives depth; size informs budget. Explicit choices are preserved. Dynamic attacks
+require authorization and isolation. Structure and performance review are optional.
 
-## Language layout
-
-- **English is authoritative for execution.** `SKILL.md`, `references/*.md`, this README,
-  and `CHANGELOG.md` are the machine-facing specification.
-- **Chinese is the human-facing manual.** The synchronized Chinese reading version lives in
-  `.chinese/`. Agents do not need to read it for execution; it is provided for Chinese
-  readers who want the narrative in Chinese.
-- If the two versions disagree, the English files prevail.
-
-## Use cases
-
-- Pre-release security review of a project
-- First-pass security reconnaissance when taking over an unfamiliar codebase
-- Secret and hard-coded credential checks, API authorization review, dependency CVE review,
-  and deployment configuration review
-- Pre-release quick self-review (A-track), in-iteration gates (B-track), and monthly deep
-  review (C-track)
-- Producing a reproducible security report instead of scattered advice
-
-## Repository layout
-
-```text
-.
-├── SKILL.md                     # authoritative workflow and report contract (English)
-├── VERSION
-├── CHANGELOG.md
-├── README.md
-├── references/                  # English execution references
-│   ├── server-vulns.md
-│   ├── api-audit.md
-│   ├── secrets-hijack.md
-│   ├── advanced-risks.md
-│   ├── vuln-intel.md
-│   ├── attack-testing.md
-│   ├── risk-standards.md
-│   ├── structure-optimization.md
-│   ├── performance.md
-│   ├── audit-prompts.md
-│   └── self-review.md
-├── scripts/
-│   ├── scan_secrets.py          # cross-platform scanner (preferred)
-│   ├── self_check.py            # cross-platform quick check (preferred; --strict)
-│   ├── scan_secrets.sh          # bash fallback
-│   └── self_check.sh            # bash fallback
-├── tests/
-│   └── test_smoke.py
-├── .github/workflows/ci.yml
-└── .chinese/                    # Chinese human manual; not needed by agents
-    ├── README.md
-    ├── SKILL.md
-    ├── CHANGELOG.md
-    └── references/
+Run commands from this skill directory with Python 3.9+:
 ```
-
-The `.chinese/` directory is intentionally hidden from the normal reading path. It is a
-human manual, not a second execution specification. Do not load it as context for an audit
-unless the user explicitly asks for the Chinese version.
-
-## Quick start
-
-```bash
-# Pre-release check; non-zero exit on FAIL, suitable for CI
-python scripts/self_check.py <project-dir> --strict
-
-# Secret scan with JSON output
-python scripts/scan_secrets.py <project-dir> --json
-
-# Regression tests after changing rules or scripts
+python scripts/audit_depth.py PROJECT --json --risk payment --risk sensitive-data
+python scripts/scan_secrets.py PROJECT --json
+python scripts/audit_history.py PROJECT --commits 200 --timeout 60
+python scripts/self_check.py PROJECT --strict --json
+python scripts/audit_report.py report.json --render report.md
+python scripts/audit_report.py current.json --compare previous.json
 python -m unittest discover -s tests -v
+python scripts/audit_doctor.py
 ```
 
-The Python tools run on Windows, Linux, and macOS. The bash tools require Linux, macOS, or
-Git Bash. On Windows, the built-in `bash.exe` may be a WSL launcher without a distribution;
-do not assume it is usable.
+Self-check strict exits: 0 no FAIL/WARN, 1 FAIL, 2 incomplete/WARN. These are check
+outcomes, not release authorization. History exits: 0 no candidates in bounded scan,
+1 candidates, 2 incomplete. Git scanning never checks out files or runs external diff tools.
+It scans added patch lines reachable from HEAD, not all branches or binary history.
 
-## Requirements
+Secret baselines require exact fingerprints; broad file/rule suppression is no longer
+accepted. Candidates still need manual classification. Excluded artifacts and binary
+contents need separate review. Raw third-party audit output is omitted from reports.
 
-- Python 3.9+ for static review and quick checks
-- bash 4+, `grep`, and `find` only when using the bash fallbacks
-- `curl` for dynamic testing; command templates use bash syntax, so use Git Bash on Windows
-  or translate them to equivalent PowerShell
-- Optional dependency-audit tools: `npm`, `pip-audit`, `govulncheck`, `cargo`, `composer`
-- Dynamic testing is permitted only in a user-authorized local or test environment
+See references/report-format.md and assets/ for JSON contracts and templates. Reports
+must be redacted and kept out of Git. English is authoritative; .chinese is the human manual.
+Bash scripts remain legacy fallbacks with rule-name parity only; alpha1.5 enhancements
+are Python-only. CI covers Ubuntu/Windows; local checks do not prove every platform.
 
-## Safety boundaries
+## alpha1.5 controller
 
-- Static review does not modify or delete project files.
-- Dynamic attack testing requires explicit authorization, environment isolation, and red-line
-  compliance.
-- Destructive payloads, denial-of-service testing, third-party attacks, and access to real
-  user data are prohibited.
-- LLM tool-abuse tests may use only mock tools, dry-run tools, or a disposable tenant; real
-  deletion, bulk messaging, and payment are prohibited.
-- Reports are written to `security-reports/` and redacted; raw evidence is never committed.
-
-## Versions
-
-- **alpha1.2** — English-first migration. The English `SKILL.md` and `references/` are the
-  authoritative execution specification; the Chinese manual is synchronized under
-  `.chinese/`. No changes to detection behavior.
-- **alpha1.1** — Safety and consistency fixes; cross-platform Python tools; regression tests
-  and CI; report redaction, coverage boundaries, and appendix contracts.
-- **alpha1.0** — Initial snapshot: ten-stage workflow, 11 reference files, two bash scripts,
-  report template, and A/B/C self-review cadence.
-
-## License
-
-No license has been declared. Add one before redistribution if required by your
-organization.
+New audits can use `python scripts/audit_control.py request.json` or JSON on stdin.
+`{"action":"describe"}` lists calls; `{"action":"profiles"}` returns all depth defaults.
+See [controller contract](references/controller.md) for state, evidence and limitations.
+This release provides local JSON CLI/Python tools; MCP installation is not included.
