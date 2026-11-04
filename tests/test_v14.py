@@ -8,6 +8,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'scripts'))
 import audit_depth as depth
+from evidence_helpers import high_record
 import audit_history as history
 import audit_report as report
 import scan_secrets as scanner
@@ -31,7 +32,7 @@ class V14Tests(unittest.TestCase):
 
     def test_reasoned_na_and_evidence(self):
         h={f'H{i}':{'status':'n/a','reason':'no such surface'} for i in range(1,9)}
-        for k in ('H6','H8'):h[k]={'status':'done','evidence':'appendix'}
+        for k in ('H6','H8'):h[k]=high_record(k)
         self.assertTrue(depth.evaluate_high_only(h)['achieved'])
         del h['H1']['reason']
         self.assertFalse(depth.evaluate_high_only(h)['achieved'])

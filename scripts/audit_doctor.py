@@ -22,11 +22,20 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "alpha1.5"
+VERSION = "alpha1.7"
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
 REQUIRED_FILES = [
+    "scripts/dependency_audit.py",
+    "scripts/audit_guidance.py",
+    "tests/test_v17.py",
+    "references/controller-v17.md",
+    "references/controller-v16.md",
+    "scripts/audit_contracts.py",
+    "scripts/config_analysis.py",
+    "tests/test_v16.py",
+    "tests/evidence_helpers.py",
     "scripts/audit_control.py",
     "scripts/audit_profiles.py",
     "scripts/audit_worker.py",

@@ -14,6 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "scripts"))
 
 import audit_depth  # noqa: E402
+from evidence_helpers import high_record
 
 
 def metrics(**overrides) -> dict:
@@ -97,7 +98,7 @@ class DepthTests(unittest.TestCase):
         incomplete = audit_depth.evaluate_high_only({"H1": "done", "H2": "n/a", "H3": "done"})
         self.assertFalse(incomplete["achieved"])
 
-        complete = audit_depth.evaluate_high_only({f"H{i}": {"status": "done", "evidence": "appendix"} for i in range(1, 9)})
+        complete = audit_depth.evaluate_high_only({f"H{i}": high_record(f"H{i}") for i in range(1, 9)})
         self.assertTrue(complete["achieved"])
         self.assertEqual(complete["count"], 8)
 
@@ -109,7 +110,7 @@ class DepthTests(unittest.TestCase):
         script = ROOT / "scripts" / "audit_depth.py"
         with tempfile.TemporaryDirectory(prefix="audit-depth-") as tmp:
             status_file = Path(tmp) / "high.json"
-            status_file.write_text(json.dumps({f"H{i}": {"status": "done", "evidence": "appendix"} for i in range(1, 9)}), encoding="utf-8")
+            status_file.write_text(json.dumps({f"H{i}": high_record(f"H{i}") for i in range(1, 9)}), encoding="utf-8")
             complete = subprocess.run(
                 [sys.executable, str(script), "--high-status", str(status_file)],
                 capture_output=True, text=True, timeout=60, check=False,

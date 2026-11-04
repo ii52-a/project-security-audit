@@ -8,7 +8,7 @@ description: >-
 ---
 # Security Audit
 
-Current version: **alpha1.5**
+Current version: **alpha1.7**
 
 English instructions are authoritative. `.chinese/` is the human manual.
 
@@ -17,8 +17,12 @@ English instructions are authoritative. `.chinese/` is the human manual.
 Use the local controller for new audits. Read
 `references/controller.md` for exact quick / comprehensive-low / comprehensive-high
 parameters and request contracts. Call `scripts/audit_control.py` with JSON actions:
-start -> next_action -> run_check/record_review -> status -> finalize. Use profiles
-for machine-readable budgets and describe for available actions. State must be outside
+start -> run_pending -> next_action -> record_review -> finalize. Use profiles
+for machine-readable budgets and describe for available actions. Use the returned request templates: review_template supplies real candidate IDs;
+finding_draft supplies source-grounded fields; write_evidence creates hashed artifacts.
+Coverage is computed from reviewed_files and an explicit interface inventory; never invent totals.
+Use progress for cheap unverified progress and status for verified freshness.
+State must be outside
 the target. Unknown/failed/skipped checks remain limitations, never clean results.
 The controller is a callable CLI/Python API, not an installed MCP server. No arbitrary
 shell command is accepted. It never executes dynamic attacks. Review tasks provide the
@@ -48,7 +52,8 @@ Large workloads require budget/sampling decisions. Time targets are estimates, n
 | comprehensive-high | <5 h | Every applicable H item, evidence index and second pass |
 
 No minimum attack count. Prioritize real attack surfaces. For high, record all H1-H8 as
-`{status: done, evidence: ...}` or `{status: n/a, reason: ...}`. H6 and H8 always apply.
+`{status: done, evidence: {artifact, sha256, summary, items}}` or `{status: n/a, reason: ...}`. H6 and H8 always apply. Evidence items must satisfy the H-specific fields in
+references/controller.md; controller calls verify artifact hashes and JSON contents.
 Skipped/missing applicable items mean high was not achieved; report partial coverage.
 `python scripts/audit_depth.py --high-status status.json` checks this contract.
 
@@ -110,7 +115,7 @@ Do not fill unknown coverage with zero or claim all interfaces were found from r
 ## Tools and maintenance
 
 Python 3.9+ is the maintained implementation. Bash scripts are legacy limited fallbacks:
-they do not implement alpha1.5 history, strict gates or report contracts. Rule-name parity
+they do not implement alpha1.7 history, strict gates or report contracts. Rule-name parity
 does not imply equivalent behavior. Prefer Python on Windows, Linux and macOS.
 
 Run `python -m unittest discover -s tests -v` and `python scripts/audit_doctor.py`

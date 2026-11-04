@@ -26,6 +26,7 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
+from config_analysis import python_debug_lines, compose_environment
 
 try:
     from scan_secrets import VERSION as SCAN_VERSION
@@ -35,7 +36,7 @@ except ImportError:  # pragma: no cover - 允许从其他目录导入
     from scan_secrets import VERSION as SCAN_VERSION
     from scan_secrets import scan as scan_secrets
 
-VERSION = "alpha1.5"
+VERSION = "alpha1.7"
 
 EXCLUDE_DIRS = {
     ".git", "node_modules", "dist", "build", "vendor", "__pycache__",
@@ -89,6 +90,7 @@ class Report:
     def as_dict(self) -> dict:
         return {
             "tool": "self_check",
+            "dependency_results": getattr(self, "dependency_results", []),
             "version": VERSION,
             "scan_secrets_version": SCAN_VERSION,
             "target": str(self.target),
@@ -175,141 +177,60 @@ def check_secrets(report: Report, target: Path) -> None:
         report.add("WARN", "secrets-files", f"发现 {len(sensitive)} 个疑似敏感文件（确认是否被忽略/是否含真值）", details)
 
 
-def _dep_npm(target: Path, timeout: int) -> tuple[str, str, list[str]]:
-    npm = shutil.which("npm")
-    if not npm:
-        return "WARN", "有 package-lock.json 但本机无 npm，跳过（NOT EXECUTED）", []
-    code, output = run([npm, "audit", "--json", "--omit=dev"], target, timeout)
-    data = _json_from_output(output)
-    if isinstance(data, dict) and not data.get("error") and ("advisories" in data or isinstance(data.get("metadata"), dict)):
-        vulns = (data.get("metadata") or {}).get("vulnerabilities") or {}
-        high = int(vulns.get("high", 0) or 0) + int(vulns.get("critical", 0) or 0)
-        total = int(vulns.get("total", 0) or 0)
-        if not vulns:
-            advisories = data.get("advisories") or {}
-            if isinstance(advisories, dict):
-                items = [item for item in advisories.values() if isinstance(item, dict)]
-                high = sum(1 for item in items if str(item.get("severity", "")).lower() in ("high", "critical"))
-                total = len(items)
-        if high:
-            return "FAIL", f"npm audit 发现 {high} 个 high/critical 漏洞（退出码 {code}）", [_tail(output)]
-        if total:
-            return "WARN", f"npm audit 发现 {total} 个低/中危漏洞（退出码 {code}），需人工判断", [_tail(output)]
-        if code == 0 and (vulns or "advisories" in data):
-            return "PASS", "npm audit 未发现漏洞", []
-    if code == 0:
-        return "WARN", "npm audit 输出无法验证（PARSE ERROR）", []
-    return "WARN", f"npm audit 退出码 {code}，无法解析 JSON，需人工判断", [_tail(output)]
+def _dependency(tool, target, timeout, include_dev=True):
+    from dependency_audit import run_audit
+    return run_audit(tool, target, timeout, run, shutil.which, include_dev)
 
 
-def _dep_pip(target: Path, timeout: int) -> tuple[str, str, list[str]]:
-    pip_audit = shutil.which("pip-audit")
-    if not pip_audit:
-        return "WARN", "有 requirements.txt 但未装 pip-audit（NOT EXECUTED）", []
-    code, output = run([pip_audit, "-r", "requirements.txt", "--format", "json"], target, timeout)
-    data = _json_from_output(output)
-    vulnerable = 0
-    if isinstance(data, dict):
-        data = data.get("dependencies")
-    if isinstance(data, list):
-        vulnerable = sum(1 for item in data if isinstance(item, dict) and item.get("vulns"))
-    if vulnerable:
-        return "FAIL", f"pip-audit 发现 {vulnerable} 个存在已知漏洞的依赖", [_tail(output)]
-    if code == 0 and isinstance(data, list) and all(isinstance(x, dict) and isinstance(x.get("vulns"), list) for x in data):
-        return "PASS", "pip-audit 未发现已知漏洞", []
-    return "WARN", f"pip-audit 退出码 {code}，需人工判断", [_tail(output)]
+def _dep_npm(target, timeout):
+    from dependency_audit import legacy
+    return legacy(_dependency('npm', target, timeout))
 
 
-def _dep_govuln(target: Path, timeout: int) -> tuple[str, str, list[str]]:
-    govulncheck = shutil.which("govulncheck")
-    if not govulncheck:
-        return "WARN", "有 go.mod 但未装 govulncheck（NOT EXECUTED）", []
-    code, output = run([govulncheck, "-json", "./..."], target, timeout)
-    findings = output.count('"finding"')
-    if findings:
-        return "FAIL", f"govulncheck 发现 {findings} 条可达漏洞", [_tail(output)]
-    if code == 0 and isinstance(_json_from_output(output), dict) and "config" in _json_from_output(output):
-        return "PASS", "govulncheck 未发现可达漏洞", []
-    return "WARN", f"govulncheck 退出码 {code}，需人工判断", [_tail(output)]
+def _dep_pip(target, timeout):
+    from dependency_audit import legacy
+    return legacy(_dependency('pip', target, timeout))
 
 
-def _dep_cargo(target: Path, timeout: int) -> tuple[str, str, list[str]]:
-    cargo = shutil.which("cargo")
-    if not cargo:
-        return "WARN", "有 Cargo.toml 但未装 cargo/cargo-audit（NOT EXECUTED）", []
-    code, output = run([cargo, "audit", "--json"], target, timeout)
-    data = _json_from_output(output)
-    found = 0
-    if isinstance(data, dict):
-        vulns = data.get("vulnerabilities") or {}
-        if isinstance(vulns, dict):
-            found = int(vulns.get("count", 0) or 0) if vulns.get("found") else 0
-            if isinstance(vulns.get("list"), list):
-                found = len(vulns["list"])
-    if found:
-        return "FAIL", f"cargo audit 发现 {found} 个漏洞", [_tail(output)]
-    if code == 0 and isinstance(data, dict) and isinstance(data.get("vulnerabilities"), dict) and "list" in data["vulnerabilities"]:
-        return "PASS", "cargo audit 未发现漏洞", []
-    return "WARN", f"cargo audit 退出码 {code}，需人工判断", [_tail(output)]
+def _dep_govuln(target, timeout):
+    from dependency_audit import legacy
+    return legacy(_dependency('go', target, timeout))
 
 
-def _dep_composer(target: Path, timeout: int) -> tuple[str, str, list[str]]:
-    composer = shutil.which("composer")
-    if not composer:
-        return "WARN", "有 composer.json 但未装 composer（NOT EXECUTED）", []
-    code, output = run([composer, "audit", "--format=json"], target, timeout)
-    data = _json_from_output(output)
-    found = 0
-    if isinstance(data, dict):
-        advisories = data.get("advisories") or {}
-        if isinstance(advisories, dict):
-            found = sum(len(items) for items in advisories.values() if isinstance(items, list))
-    if found:
-        return "FAIL", f"composer audit 发现 {found} 条安全通告", [_tail(output)]
-    if code == 0 and isinstance(data, dict) and isinstance(data.get("advisories"), (dict, list)):
-        return "PASS", "composer audit 未发现安全通告", []
-    return "WARN", f"composer audit 退出码 {code}，需人工判断", [_tail(output)]
+def _dep_cargo(target, timeout):
+    from dependency_audit import legacy
+    return legacy(_dependency('cargo', target, timeout))
+
+
+def _dep_composer(target, timeout):
+    from dependency_audit import legacy
+    return legacy(_dependency('composer', target, timeout))
 
 
 def _safe_dependency(check, target, timeout):
     try:
         return check(target, timeout)
     except (ValueError, TypeError, AttributeError, KeyError):
-        return 'WARN', 'Dependency tool output malformed (PARSE ERROR)', []
+        return 'WARN', 'Dependency output malformed', []
 
 
-def check_dependencies(report: Report, target: Path, timeout: int, skip: bool) -> None:
+def check_dependencies(report, target, timeout, skip, include_dev=True):
+    from dependency_audit import legacy
+    report.dependency_results = []
     if skip:
-        report.add("WARN", "dependencies", "已通过 --skip-deps 跳过依赖审计")
+        report.add('WARN', 'dependencies', 'Dependency audit explicitly skipped')
         return
-
-    detectors = []
-    if (target / "package-lock.json").exists() or (target / "npm-shrinkwrap.json").exists():
-        detectors.append(_safe_dependency(_dep_npm, target, timeout))
-    if (target / "requirements.txt").exists():
-        detectors.append(_safe_dependency(_dep_pip, target, timeout))
-    if (target / "go.mod").exists():
-        detectors.append(_safe_dependency(_dep_govuln, target, timeout))
-    if (target / "Cargo.toml").exists():
-        detectors.append(_safe_dependency(_dep_cargo, target, timeout))
-    if (target / "composer.json").exists():
-        detectors.append(_safe_dependency(_dep_composer, target, timeout))
-
-    if not detectors:
-        report.add("WARN", "dependencies",
-                   "未识别依赖清单（package-lock/requirements/go.mod/Cargo.toml/composer.json），依赖审计跳过")
-        return
-
-    rank = {"PASS": 0, "WARN": 1, "FAIL": 2}
-    worst = max((item[0] for item in detectors), key=lambda level: rank.get(level, 1))
-    for index, (level, message, lines) in enumerate(detectors, 1):
-        # Keep each tool result visible; aggregate WARN is never a clean check.
-        report.add(level, 'dependency-tool-' + str(index), message, lines)
-    message = "；".join(item[1] for item in detectors)
-    details: list[str] = []
-    for _level, _message, lines in detectors:
-        details.extend(lines)
-    report.add(worst, "dependencies", message, details[:20])
+    manifests = [('npm', ('package-lock.json','npm-shrinkwrap.json')),
+        ('pip', ('requirements.txt',)), ('go', ('go.mod',)),
+        ('cargo', ('Cargo.toml',)), ('composer', ('composer.json',))]
+    for tool, names in manifests:
+        if any((target / name).exists() for name in names):
+            result = _dependency(tool, target, timeout, include_dev)
+            report.dependency_results.append(result)
+            level, message, details = legacy(result)
+            report.add(level, 'dependency-' + tool, message, details)
+    if not report.dependency_results:
+        report.add('WARN', 'dependencies', 'No supported dependency manifest')
 
 
 def check_git(report: Report, target: Path, history_limit: int = 200) -> None:
@@ -360,7 +281,7 @@ def check_git(report: Report, target: Path, history_limit: int = 200) -> None:
 
 def iter_debug_files(target: Path):
     for root, dirs, files in os.walk(target):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and d != ".git")
         for name in sorted(files):
             path = Path(root) / name
             if path.is_symlink() or not path.is_file():
@@ -383,8 +304,13 @@ def check_debug(report: Report, target: Path) -> None:
             text = path.read_text(encoding="utf-8-sig", errors="replace")
         except OSError:
             continue
+        try:
+            python_lines = python_debug_lines(text) if path.suffix.lower() == '.py' else None
+        except SyntaxError:
+            report.add('WARN', 'debug-parse', 'Python debug review incomplete: ' + path.relative_to(target).as_posix())
+            continue
         for lineno, line in enumerate(text.splitlines(), 1):
-            if DEBUG_RE.search(line):
+            if (lineno in python_lines) if python_lines is not None else (not line.lstrip().startswith(('#','//')) and DEBUG_RE.search(line)):
                 rel = path.relative_to(target).as_posix()
                 hits.append(f"{rel}:{lineno}: [SOURCE OMITTED]")
     if not hits:
@@ -408,7 +334,7 @@ def _iter_compose_files(target: Path):
         if len(rel.parts) > 4:
             dirs[:] = []
             continue
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and d != ".git")
         for name in sorted(files):
             if re.fullmatch(r"(?:docker-compose|compose)[^/]*\.ya?ml", name, re.I):
                 path = Path(root) / name
@@ -426,8 +352,11 @@ def check_deployment(report: Report, target: Path) -> None:
             text = path.read_text(encoding="utf-8", errors="replace")
         except OSError:
             continue
-        for lineno, line in enumerate(text.splitlines(), 1):
-            if WEAK_COMPOSE_RE.search(line):
+        entries, unknown = compose_environment(text)
+        if unknown:
+            report.add('WARN', 'deployment-compose-parse', 'Unsupported environment values require review', [path.relative_to(target).as_posix() + ':' + str(n) for n in unknown])
+        for lineno, key, value in entries:
+            if re.fullmatch(r'(?:MYSQL|POSTGRES|MONGO|REDIS)_(?:ROOT_)?PASSWORD', key, re.I) and value.lower() in ('root','123456','password','admin','postgres'):
                 weak.append(f"{path.relative_to(target).as_posix()}:{lineno}: [SOURCE OMITTED]")
     if weak:
         report.add("FAIL", "deployment-compose", "docker-compose 使用常见弱默认密码", weak[:10])
@@ -442,7 +371,7 @@ def check_deployment(report: Report, target: Path) -> None:
         if len(rel.parts) > 4:
             dirs[:] = []
             continue
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and d != ".git")
         for name in sorted(files):
             if not name.endswith(".conf"):
                 continue

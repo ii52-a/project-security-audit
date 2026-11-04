@@ -1,19 +1,24 @@
 # 安全审计技能
 
-当前版本：**alpha1.5**
+当前版本：**alpha1.7**
 
 英文 SKILL.md 为执行规范，本文件为中文阅读手册。
 
-## alpha1.5：优先调用审计控制器
+## alpha1.7：优先调用审计控制器
 
 新审计推荐通过 `scripts/audit_control.py` 提交 JSON 请求，流程为：
-start 建立任务 → next_action 获取下一项 → run_check 执行工具或 record_review 提交复核
-→ status 查看进度 → finalize 生成报告。describe 返回接口，profiles 返回固定参数。
+start 建立任务 → run_pending 批量执行待检查工具 → next_action 获取下一项及请求模板
+→ record_review 提交复核 → finalize 生成报告。describe 返回接口，profiles 返回固定参数。
+模板自动填入真实候选编号；finding_draft 生成发现草稿，write_evidence 生成证据文件和哈希。
+coverage 复核提交 reviewed_files、interfaces 和 interface_inventory_complete，数量由程序计算；
+接口数量低于启发式估计时须说明 estimate_difference_reason，未知总数保持 blocked。
+progress 轻量查看已存进度，file_inventory 分页读取快照文件清单；二者不验证当前文件变化。
+需要验证当前状态时使用 status；执行、提交复核和定稿仍检查内容快照。
 这是本地 CLI/Python 工具接口，尚未安装为 MCP 服务，也不调整底层模型推理强度。
 
 状态文件必须放在被审计目录外。任务采用独占锁和原子保存；中断后可继续。
-文件路径、大小、修改时间或 Git HEAD 变化时，refresh 使全部检查失效并重新规划。
-这种元数据检测不是内容完整性证明，排除目录和保留原时间的修改可能无法识别。
+纳入范围的文件内容使用SHA256检测变化，并记录Git HEAD；保留大小和时间戳的修改也会失效。
+排除目录及符号链接不跟踪，探测限制为5万文件/1GiB，超限须缩小范围。
 已有结果默认复用；retry=true 显式重跑并使候选分诊失效。
 
 | 参数 | quick | comprehensive-low | comprehensive-high |
@@ -27,6 +32,7 @@ start 建立任务 → next_action 获取下一项 → run_check 执行工具或
 | 单条依赖命令超时 | 60秒 | 120秒 | 300秒 |
 | 工具适配输出上限 | 10 MB | 25 MB | 60 MB |
 | 清单探测目录深度（根为0） | 2 | 4 | 8 |
+| npm开发依赖 | 不包含 | 包含 | 包含 |
 | 代码审查轮次 | 1 | 1 | 2 |
 | 人工/AI分析范围 | 改动的敏感路径 | 已识别接口及高风险调用链 | 全部关键边界、权限矩阵、替代假设二次复核 |
 
@@ -72,3 +78,25 @@ audit_report.py：校验JSON、生成Markdown、对比前后报告；消失项�
 assets/提供快速和全面模板；references/report-format.md定义结构。模板需补全后才能通过。
 Python 3.9+为维护实现，Bash为旧版有限回退，不具备本版全部功能。
 修改后运行 unittest 与 audit_doctor.py；工具无法证明证据真实性，交付前必须复核。
+
+## alpha1.7 证据与候选闭环
+
+自动候选使用按来源位置确定的C-ID；移动代码行后不保证编号不变。triage.dispositions必须逐候选填写，confirmed必须关联
+finding_id且该发现状态为confirmed；manual-review自动留在JSON与Markdown待复核列表。
+resolved必须关联状态为resolved的发现，并提交retest：method、expected、observed、evidence及passed=true。
+复测字段记录审阅后的证据，控制器不会自动证明修复有效。
+旧版按检查名称分诊的格式不再接受。定稿时重新校验关联，不能用空findings隐藏已确认问题。
+
+High的每个done项必须提供evidence对象：artifact、sha256、summary、items。
+证据文件放在状态文件所在目录下，格式为对应H编号到items数组的JSON映射；控制器验证
+文件路径、SHA256和具体条目一致。可调用write_evidence免去手工生成文件与计算哈希；
+当前接口见references/controller-v17.md，H项字段表保留在references/controller-v16.md。
+second-pass还须提交analysis数组：target、alternative_hypothesis、observation。
+结构校验和文件哈希不能证明判断真实性，仍需认真复核证据。
+
+扫描结果新增coverage：跳过内容或扫描零文件时为partial；报告列出跳过的路径和原因。
+依赖响应结构异常返回未知；Python debug采用AST避免注释/文档字符串误报；Compose
+支持块状映射和列表写法，复杂语法返回告警。密码规则支持同行多次命中及带BOM的UTF16/32。
+中低危依赖通告同样进入候选；异常Go流和cargo计数矛盾返回未知。.github/.gitlab纳入扫描，
+历史命中包含列号以区分同行重复值。支持带引号的Compose环境键及config["DEBUG"]赋值。
+本版需新建alpha1.7状态，不静默迁移旧状态。三档扫描预算不变，low/high依赖检查包含开发依赖。

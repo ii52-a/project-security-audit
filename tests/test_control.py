@@ -6,6 +6,7 @@ import unittest
 from unittest.mock import patch
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]/'scripts'))
 import audit_control as control
+from evidence_helpers import high_record
 from audit_profiles import profile
 
 
@@ -71,7 +72,8 @@ class ControllerTests(unittest.TestCase):
         for c in plan:
             if c['kind']=='review':
                 r=dict(status='done',evidence='Synthetic fixture reviewed; no applicable business interface',redaction_reviewed=True)
-                if c['id']=='coverage':r['coverage']={'files':{'reviewed':1,'total':1},'interfaces':{'reviewed':0,'total':0}}
+                if c['id']=='coverage':r.update(reviewed_files=self.call('status')['snapshot']['file_paths'],interfaces=[],interface_inventory_complete=True)
+                if c['id']=='second-pass':r['analysis']=[{'target':'app.py','alternative_hypothesis':'hidden side effect','observation':'only print call'}]
                 if c['id']=='triage':r['dispositions']={}
                 self.call('record_review',check_id=c['id'],review=r)
         result=self.call('finalize',output=str(self.root/'report'),redaction_reviewed=True)
@@ -105,10 +107,10 @@ class ControllerTests(unittest.TestCase):
     def test_candidate_triage_requires_disposition(self):
         self.start()
         item={'id':'triage'}
-        state={'checks':[{'id':'secrets','result':{'assessment':'candidates'}}]}
+        state={'checks':[{'id':'secrets','result':{'assessment':'candidates','candidates':[{'id':'C-fixture'}]}}]}
         review=dict(status='done',redaction_reviewed=True,evidence='reviewed')
         with self.assertRaises(ValueError):control.validate_review(item,review,state)
-        review['dispositions']={'secrets':{'status':'manual-review','evidence':'candidate in app.py:1 needs verification'}}
+        review['dispositions']={'C-fixture':{'status':'manual-review','evidence':'candidate in app.py:1 needs verification'}}
         control.validate_review(item,review,state)
 
     def test_scanner_parameters_and_error_normalization(self):
@@ -126,11 +128,12 @@ class ControllerTests(unittest.TestCase):
             if c['kind']=='tool':self.call('skip_check',check_id=c['id'],reason='Synthetic offline test')
             else:
                 r=dict(status='done',redaction_reviewed=True,evidence='Synthetic review evidence')
-                if c['id']=='coverage':r['coverage']={'files':{'reviewed':1,'total':1},'interfaces':{'reviewed':0,'total':0}}
+                if c['id']=='coverage':r.update(reviewed_files=self.call('status')['snapshot']['file_paths'],interfaces=[],interface_inventory_complete=True)
+                if c['id']=='second-pass':r['analysis']=[{'target':'app.py','alternative_hypothesis':'hidden side effect','observation':'only print call'}]
                 if c['id']=='triage':r['dispositions']={}
                 if c['id']=='high-evidence':
                     r['high_only']={f'H{i}':{'status':'n/a','reason':'No such surface in synthetic fixture'} for i in range(1,9)}
-                    for k in ('H6','H8'):r['high_only'][k]={'status':'done','evidence':'coverage and consistency reviewed'}
+                    for k in ('H6','H8'):r['high_only'][k]=high_record(k,self.root)
                 self.call('record_review',check_id=c['id'],review=r)
         out=self.call('finalize',output=str(self.root/'high'),redaction_reviewed=True)
         doc=json.loads(Path(out['json']).read_text())

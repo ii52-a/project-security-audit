@@ -54,7 +54,7 @@ def scan_history(target, commits=200, timeout=60, max_bytes=20_000_000):
                 if rule in RULE_SCOPE and not fnmatch.fnmatch(Path(path).name, RULE_SCOPE[rule]):
                     continue
                 for match in regex.finditer(line[1:]):
-                    result['hits'].append(dict(commit=commit, file=path, line=line_no,
+                    result['hits'].append(dict(commit=commit, file=path, line=line_no, column=match.start()+1,
                         rule=rule, fingerprint=fingerprint(match[0]), snippet='[REDACTED]'))
             line_no += 1
     return result

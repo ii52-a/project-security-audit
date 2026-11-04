@@ -87,7 +87,30 @@ def validate(data):
             errors.extend(evaluate_high_only(high)['issues'])
     if data.get('redaction_reviewed') is not True:
         errors.append('human/agent redaction review required before persistence')
+    candidates = data.get('candidates', [])
+    if not isinstance(candidates, list):
+        errors.append('candidates must be a list')
+    else:
+        seen = set()
+        by_id = {f['id']: f for f in findings if isinstance(f,dict) and isinstance(f.get('id'),str)}
+        for c in candidates:
+            if not isinstance(c,dict) or not isinstance(c.get('id'),str):
+                errors.append('candidate requires string id'); continue
+            if c['id'] in seen:errors.append('duplicate candidate ID')
+            seen.add(c['id'])
+            d = c.get('disposition')
+            if not isinstance(d,dict) or d.get('status') not in ('confirmed','false-positive','manual-review','resolved') or not isinstance(d.get('evidence'),str) or not d['evidence'].strip():
+                errors.append('candidate requires disposition and evidence'); continue
+            if d['status'] in ('confirmed','resolved'):
+                linked=by_id.get(d.get('finding_id')) if isinstance(d.get('finding_id'),str) else None
+                if linked is None or linked.get('status')!=d['status']:errors.append('candidate missing linked finding with matching status')
+                if d['status']=='resolved':
+                    retest=d.get('retest')
+                    if not isinstance(retest,dict) or retest.get('passed') is not True or any(not isinstance(retest.get(k),str) or not retest[k].strip() for k in ('method','expected','observed','evidence')):
+                        errors.append('resolved candidate requires successful structured retest')
     if data.get('conclusion') == 'releasable':
+        if isinstance(candidates,list) and any(isinstance(c,dict) and isinstance(c.get('disposition'),dict) and c['disposition'].get('status') not in ('false-positive','resolved') for c in candidates):
+            errors.append('unresolved candidates block release')
         if data.get('depth') == 'quick' or data.get('coverage_complete') is not True or data.get('limitations'):
             errors.append('incomplete coverage cannot declare releasable')
         if any(isinstance(c, dict) and c.get('status') not in ('pass', 'not-applicable') for c in (checks if isinstance(checks, list) else [])):
@@ -122,7 +145,7 @@ def render(data):
     for f in data['findings']:
         lines += ['', '### ' + f['id'] + ' [' + f['severity'] + '] ' + f['title']]
         lines += [k + ': ' + f[k] for k in ('status', 'confidence', 'location', 'evidence', 'remediation')]
-    for key in ('parameters', 'checks', 'dynamic', 'high_only', 'score', 'roadmap', 'structure', 'performance'):
+    for key in ('parameters', 'checks', 'candidates', 'unresolved_candidates', 'dynamic', 'high_only', 'score', 'roadmap', 'structure', 'performance'):
         if key in data:
             lines += ['', '## ' + key.title(), '```json', json.dumps(data[key], ensure_ascii=False, indent=2), '```']
     return '\n'.join(lines) + '\n'

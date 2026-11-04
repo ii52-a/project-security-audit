@@ -5,7 +5,7 @@
     python scripts/scan_secrets.py <目标目录> [--json] [--reveal]
         [--max-size-mb 2] [--exclude GLOB]... [--baseline FILE] [--fail-on-hit]
 
-输出默认脱敏（只保留命中值前后各 4 位），避免密钥进入终端/CI 日志；
+输出默认完整脱敏，避免密钥进入终端/CI 日志；
 --reveal 才输出原文，且不应在 CI 中使用。结果仅供人工确认，存在误报与漏报。
 脚本只读，不修改目标文件。
 """
@@ -21,7 +21,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "alpha1.5"
+VERSION = "alpha1.7"
 
 EXCLUDE_DIRS = {
     ".git", "node_modules", "dist", "build", "vendor", "__pycache__",
@@ -110,7 +110,9 @@ def fingerprint(value: str) -> str:
 
 
 def is_placeholder(value: str) -> bool:
-    return bool(PLACEHOLDER_RE.search(value))
+    # Match an entire assigned value, never a substring in a plausible real secret.
+    assigned = re.split(r'[:=]', value, maxsplit=1)[-1].strip().strip('\"\'')
+    return bool(PLACEHOLDER_RE.fullmatch(assigned))
 
 
 def iter_files(target: Path, max_bytes: int, excludes: list[str] | None = None, skipped=None):
@@ -119,9 +121,9 @@ def iter_files(target: Path, max_bytes: int, excludes: list[str] | None = None, 
     skipped = skipped if skipped is not None else []
     for root, dirs, files in os.walk(target):
         for d in dirs:
-            if d in EXCLUDE_DIRS or d.startswith(".git") or (Path(root) / d).is_symlink():
+            if d in EXCLUDE_DIRS or d == ".git" or (Path(root) / d).is_symlink():
                 skipped.append({"path": (Path(root) / d).relative_to(target).as_posix(), "reason": "excluded directory or symlink"})
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git") and not (Path(root) / d).is_symlink())
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and d != ".git" and not (Path(root) / d).is_symlink())
         for name in sorted(files):
             path = Path(root) / name
             rel = path.relative_to(target).as_posix()
@@ -145,22 +147,20 @@ def iter_files(target: Path, max_bytes: int, excludes: list[str] | None = None, 
             yield path
 
 
-def is_binary(path: Path) -> bool:
-    try:
-        chunk = path.read_bytes()[:8192]
-    except OSError:
-        return True
-    return b"\x00" in chunk
+def read_text(path: Path) -> str:
+    raw = path.read_bytes()
+    if raw.startswith((b'\xff\xfe\x00\x00', b'\x00\x00\xfe\xff')):
+        return raw.decode('utf-32')
+    if raw.startswith((b'\xff\xfe', b'\xfe\xff')):
+        return raw.decode('utf-16')
+    if b'\x00' in raw[:8192]:
+        raise UnicodeError('binary content')
+    return raw.decode('utf-8-sig')
 
 
-def scan_file(path: Path, target: Path, reveal: bool = False) -> list[dict]:
+def scan_file(path: Path, target: Path, reveal: bool = False, content=None) -> list[dict]:
     hits: list[dict] = []
-    if is_binary(path):
-        return hits
-    try:
-        text = path.read_text(encoding="utf-8-sig", errors="replace")
-    except OSError:
-        return hits
+    text = read_text(path) if content is None else content
     rel = path.relative_to(target).as_posix()
     for lineno, line in enumerate(text.splitlines(), 1):
         if not line:
@@ -169,29 +169,22 @@ def scan_file(path: Path, target: Path, reveal: bool = False) -> list[dict]:
             scope = RULE_SCOPE.get(rule)
             if scope and not fnmatch.fnmatch(path.name, scope):
                 continue
-            match = regex.search(line)
-            if not match:
-                continue
-            raw = match.group(0)
-            if is_placeholder(raw):
-                continue
-            # Never include surrounding text: it can contain a second secret or PII.
-            snippet = line.strip()[:160] if reveal else "[REDACTED]"
-            hits.append({
-                "file": rel,
-                "line": lineno,
-                "rule": rule,
-                "snippet": snippet,
-                "fingerprint": fingerprint(raw),
-                "redacted": not reveal,
-            })
+            for match in regex.finditer(line):
+                raw = match.group(0)
+                if is_placeholder(raw):
+                    continue
+                hits.append({
+                    "file": rel, "line": lineno, "column": match.start() + 1,
+                    "rule": rule, "snippet": raw if reveal else "[REDACTED]",
+                    "fingerprint": fingerprint(raw), "redacted": not reveal,
+                })
     return hits
 
 
 def find_sensitive_files(target: Path) -> list[str]:
     found: list[str] = []
     for root, dirs, files in os.walk(target):
-        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and not d.startswith(".git"))
+        dirs[:] = sorted(d for d in dirs if d not in EXCLUDE_DIRS and d != ".git")
         for name in sorted(files):
             path = Path(root) / name
             is_docker_config = name == "config.json" and ".docker" in Path(root).parts
@@ -247,16 +240,15 @@ def scan(target: Path, max_size_mb: float = 2.0, excludes: list[str] | None = No
     skipped = []
     for path in iter_files(target, max_bytes, excludes, skipped):
         try:
-            with path.open('rb') as stream:
-                binary = b'\x00' in stream.read(8192)
-            if binary:
-                skipped.append({'path': path.relative_to(target).as_posix(), 'reason': 'binary content'})
-                continue
+            content = read_text(path)
+        except UnicodeError:
+            skipped.append({'path': path.relative_to(target).as_posix(), 'reason': 'binary or unsupported text encoding'})
+            continue
         except OSError:
             skipped.append({'path': path.relative_to(target).as_posix(), 'reason': 'read error'})
             continue
         files_scanned += 1
-        hits.extend(scan_file(path, target, reveal=reveal))
+        hits.extend(scan_file(path, target, reveal=reveal, content=content))
     hits, suppressed = apply_baseline(hits, baseline)
     return {
         "tool": "scan_secrets",
@@ -267,6 +259,7 @@ def scan(target: Path, max_size_mb: float = 2.0, excludes: list[str] | None = No
         "hits": hits,
         "baseline_suppressed": suppressed,
         "skipped": skipped,
+        "coverage": "partial" if skipped or not files_scanned else "complete",
         "sensitive_files": find_sensitive_files(target),
         "stats": {"files_scanned": files_scanned, "hit_count": len(hits)},
     }

@@ -24,7 +24,7 @@ import re
 import sys
 from pathlib import Path
 
-VERSION = "alpha1.5"
+VERSION = "alpha1.7"
 
 # 工作量提示阈值；不直接决定审计深度。
 LOW_MAX_FILES = 2_000
@@ -327,19 +327,9 @@ def render_high_only_checklist() -> str:
 
 def evaluate_high_only(statuses: dict) -> dict:
     """Every H item needs evidence or a reasoned N/A; H6/H8 always apply."""
-    issues, completed = [], []
-    for item in HIGH_ONLY_ITEMS:
-        key = item["id"]
-        record = statuses.get(key, {})
-        if not isinstance(record, dict):
-            record = {"status": record}
-        state = record.get("status")
-        if state == "done" and record.get("evidence"):
-            completed.append(key)
-        elif state == "n/a" and record.get("reason") and key not in ("H6", "H8"):
-            continue
-        else:
-            issues.append(key + ": requires done + evidence, or applicable N/A + reason")
+    from audit_contracts import high_errors
+    issues = high_errors(statuses)
+    completed = [key for key, record in statuses.items() if isinstance(record,dict) and record.get('status')=='done' and not any(i.startswith(key+':') for i in issues)] if isinstance(statuses,dict) else []
     return dict(achieved=not issues, completed=completed, count=len(completed), issues=issues)
 
 

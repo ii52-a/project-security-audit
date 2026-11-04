@@ -1,3 +1,11 @@
+# alpha1.7
+
+Preserve all dependency advisory severities; strict Go event/cargo consistency parsing; include .github/.gitlab; unique history occurrence IDs; quoted Compose keys and Python subscript debug; inventory-derived coverage; resolved candidates with retests; guided templates, batch checks, finding drafts, evidence generation and lightweight progress. New states required. Python-only improvements; legacy Bash unchanged.
+
+# alpha1.6
+
+Fix evaluation E01-E09: candidate/finding linkage, structured hashed high evidence, strict dependency output parsing, AST debug and Compose list handling, multi-hit/UTF16 secrets, partial coverage, content snapshots, risk-preserving refresh and typed JSON requests. Breaking state/evidence contract: start new state. Python-only; Bash legacy divergence retained.
+
 # alpha1.5
 
 Persistent audit controller, JSON tool API, deterministic depth profiles, task queue, cache/invalidation, bounded adapters, review evidence gates and automatic report assembly. Local CLI/API only; MCP deferred.
